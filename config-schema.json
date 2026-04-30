@@ -285,6 +285,16 @@
                         "default": false,
                         "description": "If true the model will not show up in /v1/models responses. It can still be used as normal in API requests."
                     },
+                    "memory": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Capacity units consumed by this model when matrix.capacity mode is used. Units are arbitrary but must match matrix.capacity."
+                    },
+                    "evictCost": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Relative cost of evicting this model in matrix.capacity cost mode. Defaults to this model's memory when omitted."
+                    },
                     "timeouts": {
                         "$ref": "#/definitions/timeouts"
                     }
@@ -327,12 +337,19 @@
         },
         "matrix": {
             "type": "object",
-            "description": "Solver-based alternative to groups. Declares valid combinations of concurrent models. The solver minimizes eviction cost when swapping. A config must use either groups or matrix, not both.",
-            "required": [
-                "vars",
-                "sets"
-            ],
+            "description": "Alternative to groups for running concurrent models. Use capacity mode with matrix.capacity plus per-model memory, or legacy set mode with vars and sets. A config must use either groups or matrix, not both.",
             "properties": {
+                "capacity": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Total available capacity for concurrent models. Units are user-defined and compared against models.*.memory."
+                },
+                "strategy": {
+                    "type": "string",
+                    "enum": ["cost", "lru"],
+                    "default": "cost",
+                    "description": "Eviction strategy for matrix.capacity mode. cost minimizes evictCost, defaulting to memory. lru evicts least recently used models until the request fits."
+                },
                 "vars": {
                     "type": "object",
                     "description": "Short names for models. Keys must be alphanumeric, 1-8 characters. All sets and evict_costs must use these IDs.",
@@ -361,7 +378,25 @@
                     }
                 }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "oneOf": [
+                {
+                    "required": ["capacity"],
+                    "not": {
+                        "anyOf": [
+                            { "required": ["vars"] },
+                            { "required": ["sets"] },
+                            { "required": ["evict_costs"] }
+                        ]
+                    }
+                },
+                {
+                    "required": ["vars", "sets"],
+                    "not": {
+                        "required": ["capacity"]
+                    }
+                }
+            ]
         },
         "hooks": {
             "type": "object",

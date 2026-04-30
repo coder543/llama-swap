@@ -54,6 +54,11 @@ type ModelConfig struct {
 
 	// Timeout settings for proxy connections
 	Timeouts TimeoutsConfig `yaml:"timeouts"`
+
+	// Capacity-based matrix settings. Memory is in arbitrary user-defined
+	// units, and EvictCost defaults to Memory when not set.
+	Memory    int  `yaml:"memory"`
+	EvictCost *int `yaml:"evictCost"`
 }
 
 func (m *ModelConfig) UnmarshalYAML(unmarshal func(interface{}) error) error {

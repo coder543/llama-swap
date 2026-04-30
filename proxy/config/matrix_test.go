@@ -218,6 +218,62 @@ func TestValidateMatrix_NoSets(t *testing.T) {
 	assert.Contains(t, err.Error(), "at least one set")
 }
 
+func TestValidateMatrix_CapacityMode(t *testing.T) {
+	models := map[string]ModelConfig{
+		"gemma": {Cmd: "echo gemma", Memory: 18},
+		"qwen":  {Cmd: "echo qwen", Memory: 22, EvictCost: new(5)},
+	}
+
+	expanded, err := ValidateMatrix(MatrixConfig{Capacity: 40, Strategy: "cost"}, models)
+	require.NoError(t, err)
+	assert.Empty(t, expanded)
+}
+
+func TestValidateMatrix_CapacityModeValidation(t *testing.T) {
+	t.Run("requires model memory", func(t *testing.T) {
+		models := map[string]ModelConfig{
+			"gemma": {Cmd: "echo gemma"},
+		}
+
+		_, err := ValidateMatrix(MatrixConfig{Capacity: 40}, models)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "memory must be a positive integer")
+	})
+
+	t.Run("allows oversized model", func(t *testing.T) {
+		models := map[string]ModelConfig{
+			"gemma": {Cmd: "echo gemma", Memory: 41},
+		}
+
+		_, err := ValidateMatrix(MatrixConfig{Capacity: 40}, models)
+		require.NoError(t, err)
+	})
+
+	t.Run("rejects unknown strategy", func(t *testing.T) {
+		models := map[string]ModelConfig{
+			"gemma": {Cmd: "echo gemma", Memory: 10},
+		}
+
+		_, err := ValidateMatrix(MatrixConfig{Capacity: 40, Strategy: "random"}, models)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "strategy must be one of")
+	})
+
+	t.Run("rejects DSL fields", func(t *testing.T) {
+		models := map[string]ModelConfig{
+			"gemma": {Cmd: "echo gemma", Memory: 10},
+		}
+
+		_, err := ValidateMatrix(MatrixConfig{
+			Capacity: 40,
+			Var:      map[string]string{"g": "gemma"},
+			Sets:     OrderedSets{{Name: "s", DSL: "g"}},
+		}, models)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "capacity mode cannot use")
+	})
+}
+
 func TestValidateMatrix_UnknownMapIDInDSL(t *testing.T) {
 	models := makeModels("gemma")
 
@@ -292,6 +348,34 @@ matrix:
 	assert.Len(t, cfg.ExpandedSets, 2)
 	// Groups should be empty when matrix is used
 	assert.Empty(t, cfg.Groups)
+}
+
+func TestValidateMatrix_ConfigCapacityMode(t *testing.T) {
+	yaml := `
+models:
+  gemma:
+    cmd: echo gemma
+    proxy: http://localhost:8080
+    memory: 18
+  qwen:
+    cmd: echo qwen
+    proxy: http://localhost:8081
+    memory: 22
+    evictCost: 5
+matrix:
+  capacity: 40
+  strategy: lru
+`
+	cfg, err := LoadConfigFromReader(strings.NewReader(yaml))
+	require.NoError(t, err)
+	assert.NotNil(t, cfg.Matrix)
+	assert.Equal(t, 40, cfg.Matrix.Capacity)
+	assert.Equal(t, "lru", cfg.Matrix.Strategy)
+	assert.Empty(t, cfg.ExpandedSets)
+	assert.Empty(t, cfg.Groups)
+	assert.Equal(t, 18, cfg.Models["gemma"].Memory)
+	require.NotNil(t, cfg.Models["qwen"].EvictCost)
+	assert.Equal(t, 5, *cfg.Models["qwen"].EvictCost)
 }
 
 func filterBySetName(sets []ExpandedSet, name string) []ExpandedSet {

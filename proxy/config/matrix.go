@@ -12,6 +12,8 @@ var varKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9]{1,8}$`)
 
 // MatrixConfig represents the swap matrix configuration block.
 type MatrixConfig struct {
+	Capacity   int               `yaml:"capacity"`
+	Strategy   string            `yaml:"strategy"`
 	Var        map[string]string `yaml:"vars"`
 	EvictCosts map[string]int    `yaml:"evict_costs"`
 	Sets       OrderedSets       `yaml:"sets"`
@@ -62,6 +64,10 @@ type ExpandedSet struct {
 
 // ValidateMatrix validates the matrix config and returns all expanded sets.
 func ValidateMatrix(matrix MatrixConfig, models map[string]ModelConfig) ([]ExpandedSet, error) {
+	if matrix.Capacity > 0 {
+		return validateCapacityMatrix(matrix, models)
+	}
+
 	if len(matrix.Sets) == 0 {
 		return nil, fmt.Errorf("matrix must define at least one set")
 	}
@@ -165,6 +171,29 @@ func ValidateMatrix(matrix MatrixConfig, models map[string]ModelConfig) ([]Expan
 	}
 
 	return allExpanded, nil
+}
+
+func validateCapacityMatrix(matrix MatrixConfig, models map[string]ModelConfig) ([]ExpandedSet, error) {
+	switch matrix.Strategy {
+	case "", "cost", "lru":
+	default:
+		return nil, fmt.Errorf("strategy must be one of: cost, lru")
+	}
+
+	if len(matrix.Sets) > 0 || len(matrix.Var) > 0 || len(matrix.EvictCosts) > 0 {
+		return nil, fmt.Errorf("capacity mode cannot use vars, sets, or evict_costs; define memory and evictCost on model stanzas")
+	}
+
+	for modelID, model := range models {
+		if model.Memory <= 0 {
+			return nil, fmt.Errorf("model %s memory must be a positive integer when matrix.capacity is set", modelID)
+		}
+		if model.EvictCost != nil && *model.EvictCost < 0 {
+			return nil, fmt.Errorf("model %s evictCost must be >= 0", modelID)
+		}
+	}
+
+	return nil, nil
 }
 
 // topologicalSort returns set names in dependency order.

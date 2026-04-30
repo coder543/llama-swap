@@ -225,6 +225,10 @@ func (p *Process) CurrentState() ProcessState {
 	return p.state
 }
 
+func (p *Process) InFlightRequests() int {
+	return int(p.inFlightRequestsCount.Load())
+}
+
 // forceState forces the process state to the new state with mutex protection.
 // This should only be used in exceptional cases where the normal state transition
 // validation via swapState() cannot be used.

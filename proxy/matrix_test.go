@@ -1,9 +1,10 @@
 package proxy
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"runtime"
 	"testing"
 	"time"
 
@@ -173,10 +174,155 @@ func TestMatrixSolver_NothingRunning(t *testing.T) {
 	assert.Equal(t, []string{"g", "v"}, result.TargetSet)
 }
 
+func TestCapacitySolver_FitsWithoutEviction(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 10, "b": 15, "c": 15},
+		nil,
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Empty(t, result.Evict)
+	assert.Equal(t, []string{"a", "b", "c"}, result.TargetSet)
+}
+
+func TestCapacitySolver_CostEvictionUsesMemoryAsDefaultCost(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		nil,
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, result.Evict)
+	assert.Equal(t, []string{"a", "c"}, result.TargetSet)
+	assert.Equal(t, 10, result.TotalCost)
+}
+
+func TestCapacitySolver_CostEvictionPreservesExpensiveModel(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		map[string]int{"b": 100},
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, result.Evict)
+	assert.Equal(t, []string{"b", "c"}, result.TargetSet)
+	assert.Equal(t, 25, result.TotalCost)
+}
+
+func TestCapacitySolver_CostEvictionAllowsExplicitZeroCost(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		map[string]int{"a": 0, "b": 100},
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, result.Evict)
+	assert.Equal(t, []string{"b", "c"}, result.TargetSet)
+	assert.Equal(t, 0, result.TotalCost)
+}
+
+func TestCapacitySolver_CostEvictionRemainsOptimalAboveTwentyFourModels(t *testing.T) {
+	memory := map[string]int{"big": 100, "requested": 20}
+	costs := map[string]int{"big": 11}
+	running := []string{"big"}
+	for i := 0; i < 25; i++ {
+		modelID := fmt.Sprintf("small-%02d", i)
+		memory[modelID] = 1
+		costs[modelID] = 1
+		running = append(running, modelID)
+	}
+	solver := NewCapacitySolver(125, memory, costs, MatrixEvictionCost)
+
+	result, err := solver.Solve("requested", running, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"big"}, result.Evict)
+	assert.Equal(t, 11, result.TotalCost)
+}
+
+func TestCapacitySolver_LRUEviction(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		map[string]int{"b": 100},
+		MatrixEvictionLRU,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, map[string]uint64{"a": 2, "b": 1}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, result.Evict)
+	assert.Equal(t, []string{"a", "c"}, result.TargetSet)
+}
+
+func TestCapacitySolver_CostEvictionSkipsNonEvictableModels(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		map[string]int{"a": 100, "b": 0},
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, nil, map[string]bool{"b": true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a"}, result.Evict)
+	assert.Equal(t, []string{"b", "c"}, result.TargetSet)
+}
+
+func TestCapacitySolver_LRUEvictionSkipsNonEvictableModels(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		nil,
+		MatrixEvictionLRU,
+	)
+
+	result, err := solver.Solve("c", []string{"a", "b"}, map[string]uint64{"a": 1, "b": 2}, map[string]bool{"a": true})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"b"}, result.Evict)
+	assert.Equal(t, []string{"a", "c"}, result.TargetSet)
+}
+
+func TestCapacitySolver_ErrsWhenOnlyNonEvictableModelsCanFreeCapacity(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 25, "b": 10, "c": 15},
+		nil,
+		MatrixEvictionCost,
+	)
+
+	_, err := solver.Solve("c", []string{"a", "b"}, nil, map[string]bool{"a": true, "b": true})
+	require.ErrorIs(t, err, errNoEvictableCapacity)
+}
+
+func TestCapacitySolver_OversizedRequestEvictsEverything(t *testing.T) {
+	solver := NewCapacitySolver(
+		40,
+		map[string]int{"a": 10, "b": 20, "huge": 50},
+		nil,
+		MatrixEvictionCost,
+	)
+
+	result, err := solver.Solve("huge", []string{"a", "b"}, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"a", "b"}, result.Evict)
+	assert.Equal(t, []string{"huge"}, result.TargetSet)
+}
+
 // TestMatrix_ProxyRequestSwapRaceAgainstFastPath verifies that an eviction
 // cannot stop a process while an in-flight ProxyRequest for that process is
 // still in the [m.Unlock, Process.inFlightRequests.Add(1)] window. Without
-// matrix-level inflight tracking, the eviction's Stop() races with the
+// matrix-level request tracking, the eviction's Stop() races with the
 // pending request and kills it mid-start.
 func TestMatrix_ProxyRequestSwapRaceAgainstFastPath(t *testing.T) {
 	cfg := config.Config{
@@ -240,14 +386,6 @@ func TestMatrix_ProxyRequestSwapRaceAgainstFastPath(t *testing.T) {
 		assert.NoError(t, m.ProxyRequest("model2", w3, req))
 	}()
 
-	// Spin until R3 has acquired m.Lock and entered the eviction path. In
-	// the fixed code, R3 then blocks on m.inflight.Wait() while still
-	// holding the lock, so TryLock keeps failing.
-	for m.TryLock() {
-		m.Unlock()
-		runtime.Gosched()
-	}
-
 	// Bounded poll: give R3 a chance to demonstrate the bug by mutating
 	// state. In the fixed code R3 is blocked and nothing changes; in the
 	// buggy code R3 will Stop() model1 and start model2 within microseconds.
@@ -266,7 +404,7 @@ func TestMatrix_ProxyRequestSwapRaceAgainstFastPath(t *testing.T) {
 		if done {
 			break
 		}
-		runtime.Gosched()
+		time.Sleep(time.Millisecond)
 	}
 
 	// Invariant: R3 must be blocked while R2 is still in flight.
@@ -289,6 +427,236 @@ func TestMatrix_ProxyRequestSwapRaceAgainstFastPath(t *testing.T) {
 	assert.Contains(t, w2.Body.String(), "model1")
 	assert.Equal(t, http.StatusOK, w3.Code)
 	assert.Contains(t, w3.Body.String(), "model2")
+}
+
+func TestMatrix_CapacityModeEvictsByCost(t *testing.T) {
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": withCapacity(getTestSimpleResponderConfig("model1"), 25, 100),
+			"model2": withCapacity(getTestSimpleResponderConfig("model2"), 10, 0),
+			"model3": withCapacity(getTestSimpleResponderConfig("model3"), 15, 0),
+		},
+		Matrix: &config.MatrixConfig{
+			Capacity: 40,
+			Strategy: "cost",
+		},
+	}
+
+	m := NewMatrix(cfg, testLogger, testLogger)
+	defer m.StopProcesses(StopImmediately)
+
+	for id := range m.processes {
+		m.processes[id].testHandler = newTestHandler(id)
+	}
+
+	for _, modelID := range []string{"model1", "model2"} {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		w := httptest.NewRecorder()
+		require.NoError(t, m.ProxyRequest(modelID, w, req))
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+	assert.Equal(t, StateReady, m.processes["model1"].CurrentState())
+	assert.Equal(t, StateReady, m.processes["model2"].CurrentState())
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	require.NoError(t, m.ProxyRequest("model3", w, req))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	assert.Equal(t, StateReady, m.processes["model1"].CurrentState())
+	assert.Equal(t, StateStopped, m.processes["model2"].CurrentState())
+	assert.Equal(t, StateReady, m.processes["model3"].CurrentState())
+}
+
+func TestMatrix_CapacityModeDoesNotEvictInFlightModel(t *testing.T) {
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": withCapacity(getTestSimpleResponderConfig("model1"), 25, 0),
+			"model2": withCapacity(getTestSimpleResponderConfig("model2"), 10, 0),
+			"model3": withCapacity(getTestSimpleResponderConfig("model3"), 15, 0),
+		},
+		Matrix: &config.MatrixConfig{
+			Capacity: 40,
+			Strategy: "lru",
+		},
+	}
+
+	m := NewMatrix(cfg, testLogger, testLogger)
+	defer m.StopProcesses(StopImmediately)
+
+	for id := range m.processes {
+		m.processes[id].testHandler = newTestHandler(id)
+	}
+
+	for _, modelID := range []string{"model1", "model2"} {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		w := httptest.NewRecorder()
+		require.NoError(t, m.ProxyRequest(modelID, w, req))
+		require.Equal(t, http.StatusOK, w.Code)
+	}
+
+	model1Done := make(chan struct{})
+	go func() {
+		defer close(model1Done)
+		req := httptest.NewRequest("POST", "/v1/chat/completions?wait=50ms", nil)
+		w := httptest.NewRecorder()
+		assert.NoError(t, m.ProxyRequest("model1", w, req))
+		assert.Equal(t, http.StatusOK, w.Code)
+	}()
+
+	require.Eventually(t, func() bool {
+		m.Lock()
+		defer m.Unlock()
+		return m.activeRequests["model1"] > 0
+	}, time.Second, time.Millisecond)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	w := httptest.NewRecorder()
+	require.NoError(t, m.ProxyRequest("model3", w, req))
+	require.Equal(t, http.StatusOK, w.Code)
+	<-model1Done
+
+	assert.Equal(t, StateReady, m.processes["model1"].CurrentState())
+	assert.Equal(t, StateStopped, m.processes["model2"].CurrentState())
+	assert.Equal(t, StateReady, m.processes["model3"].CurrentState())
+}
+
+func TestMatrix_CapacityModeCountsPendingStarts(t *testing.T) {
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": withCapacity(getTestSimpleResponderConfig("model1"), 30, 0),
+			"model2": withCapacity(getTestSimpleResponderConfig("model2"), 30, 0),
+		},
+		Matrix: &config.MatrixConfig{
+			Capacity: 40,
+			Strategy: "cost",
+		},
+	}
+
+	m := NewMatrix(cfg, testLogger, testLogger)
+	defer m.StopProcesses(StopImmediately)
+
+	m.processes["model1"].testHandler = newTestHandler("model1")
+	m.processes["model2"].testHandler = newTestHandler("model2")
+
+	m.Lock()
+	m.reservations["model1"] = 1
+	m.activeRequests["model1"] = 1
+	active := m.activeModels()
+	_, err := m.solveLocked("model2", active)
+	m.Unlock()
+
+	require.ErrorIs(t, err, errNoEvictableCapacity)
+}
+
+func TestMatrix_CapacityModeRefreshesReservationForStoppedModel(t *testing.T) {
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": withCapacity(getTestSimpleResponderConfig("model1"), 30, 0),
+			"model2": withCapacity(getTestSimpleResponderConfig("model2"), 30, 0),
+		},
+		Matrix: &config.MatrixConfig{
+			Capacity: 40,
+			Strategy: "cost",
+		},
+	}
+
+	m := NewMatrix(cfg, testLogger, testLogger)
+	defer m.StopProcesses(StopImmediately)
+
+	m.processes["model1"].testHandler = newTestHandler("model1")
+	m.processes["model2"].testHandler = newTestHandler("model2")
+
+	m.Lock()
+	m.reservations["model1"] = 1
+	m.Unlock()
+
+	requestAdmitted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	m.testDelayFastPath = func() {
+		close(requestAdmitted)
+		<-releaseRequest
+	}
+
+	requestDone := make(chan struct{})
+	go func() {
+		defer close(requestDone)
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		w := httptest.NewRecorder()
+		assert.NoError(t, m.ProxyRequest("model1", w, req))
+		assert.Equal(t, http.StatusOK, w.Code)
+	}()
+
+	<-requestAdmitted
+
+	m.clearReservation("model1")
+	m.Lock()
+	active := m.activeModels()
+	_, err := m.solveLocked("model2", active)
+	m.Unlock()
+
+	require.ErrorIs(t, err, errNoEvictableCapacity)
+
+	close(releaseRequest)
+	<-requestDone
+}
+
+func TestMatrix_CapacityModeWaitHonorsRequestCancellation(t *testing.T) {
+	cfg := config.Config{
+		HealthCheckTimeout: 15,
+		Models: map[string]config.ModelConfig{
+			"model1": withCapacity(getTestSimpleResponderConfig("model1"), 30, 0),
+			"model2": withCapacity(getTestSimpleResponderConfig("model2"), 30, 0),
+		},
+		Matrix: &config.MatrixConfig{
+			Capacity: 40,
+			Strategy: "cost",
+		},
+	}
+
+	m := NewMatrix(cfg, testLogger, testLogger)
+	defer m.StopProcesses(StopImmediately)
+
+	m.processes["model1"].testHandler = newTestHandler("model1")
+	m.processes["model2"].testHandler = newTestHandler("model2")
+
+	m.Lock()
+	m.reservations["model1"] = 1
+	m.activeRequests["model1"] = 1
+	m.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- m.ProxyRequest("model2", w, req)
+	}()
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("ProxyRequest did not return after request context cancellation")
+	}
+
+	m.Lock()
+	defer m.Unlock()
+	assert.Zero(t, m.activeRequests["model2"])
+	assert.Zero(t, m.reservations["model2"])
+}
+
+func withCapacity(model config.ModelConfig, memory int, evictCost int) config.ModelConfig {
+	model.Memory = memory
+	model.EvictCost = new(evictCost)
+	return model
 }
 
 func TestMatrixSolver_FullScenario(t *testing.T) {
