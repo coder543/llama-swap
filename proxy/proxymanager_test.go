@@ -986,6 +986,42 @@ models:
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Equal(t, "model1", rec.Body.String())
 	})
+
+	t.Run("post json applies alias filters", func(t *testing.T) {
+		cfg := testConfigFromYAML(t, `
+logLevel: error
+models:
+  model1:
+    cmd: {{RESPONDER}} --port ${PORT} --silent --respond model1
+    proxy: "http://127.0.0.1:${PORT}"
+    filters:
+      setParams:
+        reasoning_effort: medium
+      setParamsByID:
+        "model1:instruct":
+          chat_template_kwargs:
+            enable_thinking: false
+`)
+
+		proxy := New(cfg)
+		defer proxy.StopProcesses(StopWaitForInflightRequest)
+		injectTestHandlers(proxy, nil)
+
+		reqBody := `{"model":"model1","messages":[{"role":"user","content":"hello"}]}`
+		req := httptest.NewRequest("POST", "/upstream/model1:instruct/v1/chat/completions", bytes.NewBufferString(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		rec := CreateTestResponseRecorder()
+
+		proxy.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var response map[string]interface{}
+		assert.NoError(t, json.Unmarshal(rec.Body.Bytes(), &response))
+
+		requestBody, _ := response["request_body"].(string)
+		assert.Equal(t, "false", gjson.Get(requestBody, "chat_template_kwargs.enable_thinking").String())
+		assert.Equal(t, "medium", gjson.Get(requestBody, "reasoning_effort").String())
+	})
 }
 
 func TestProxyManager_ChatContentLength(t *testing.T) {

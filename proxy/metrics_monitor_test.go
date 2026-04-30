@@ -781,6 +781,77 @@ data: [DONE]
 		assert.Equal(t, 23, metrics[0].Tokens.OutputTokens)
 	})
 
+	t.Run("v1/responses format with nested data response usage", func(t *testing.T) {
+		mm := newMetricsMonitor(testLogger, 10, 0)
+
+		responseBody := `data: {"event":"response.output_text.delta","data":{"type":"response.output_text.delta","item_id":"msg_123","delta":"Hello"}}
+
+data: {"event":"response.completed","data":{"type":"response.completed","response":{"id":"resp_123","object":"response","status":"completed","usage":{"input_tokens":80,"output_tokens":25,"total_tokens":105}}}}
+
+data: [DONE]
+
+`
+
+		nextHandler := func(modelID string, w http.ResponseWriter, r *http.Request) error {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(responseBody))
+			return nil
+		}
+
+		req := httptest.NewRequest("POST", "/v1/responses", nil)
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		assert.NoError(t, err)
+
+		metrics := mm.getMetrics()
+		assert.Equal(t, 1, len(metrics))
+		assert.Equal(t, 80, metrics[0].Tokens.InputTokens)
+		assert.Equal(t, 25, metrics[0].Tokens.OutputTokens)
+		assert.Equal(t, -1.0, metrics[0].Tokens.PromptPerSecond)
+		assert.Equal(t, -1.0, metrics[0].Tokens.TokensPerSecond)
+	})
+
+	t.Run("non-streaming responses request with usage data", func(t *testing.T) {
+		mm := newMetricsMonitor(testLogger, 10, 0)
+
+		responseBody := `{
+			"object": "response",
+			"output": [{
+				"type": "message",
+				"role": "assistant",
+				"content": [{"type": "output_text", "text": "Hello"}]
+			}],
+			"usage": {
+				"input_tokens": 120,
+				"output_tokens": 45
+			}
+		}`
+
+		nextHandler := func(modelID string, w http.ResponseWriter, r *http.Request) error {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(responseBody))
+			return nil
+		}
+
+		req := httptest.NewRequest("POST", "/v1/responses", nil)
+		rec := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(rec)
+
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		assert.NoError(t, err)
+
+		metrics := mm.getMetrics()
+		assert.Equal(t, 1, len(metrics))
+		assert.Equal(t, 120, metrics[0].Tokens.InputTokens)
+		assert.Equal(t, 45, metrics[0].Tokens.OutputTokens)
+		assert.Equal(t, -1.0, metrics[0].Tokens.PromptPerSecond)
+		assert.Equal(t, -1.0, metrics[0].Tokens.TokensPerSecond)
+	})
+
 	t.Run("handles empty streaming response records minimal metrics", func(t *testing.T) {
 		mm := newMetricsMonitor(testLogger, 10, 0)
 

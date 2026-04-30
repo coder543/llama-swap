@@ -344,7 +344,7 @@ func (mp *metricsMonitor) wrapHandler(
 		}
 	}
 	if strings.Contains(recorder.Header().Get("Content-Type"), "text/event-stream") {
-		if parsed, err := processStreamingResponse(modelID, recorder.StartTime(), body); err != nil {
+		if parsed, err := processStreamingResponse(modelID, request.URL.Path, recorder.StartTime(), body); err != nil {
 			mp.logger.Warnf("error processing streaming response: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 		} else {
 			tm.Tokens = parsed.Tokens
@@ -353,16 +353,7 @@ func (mp *metricsMonitor) wrapHandler(
 	} else {
 		if gjson.ValidBytes(body) {
 			parsed := gjson.ParseBytes(body)
-			usage := parsed.Get("usage")
-			timings := parsed.Get("timings")
-
-			// extract timings for infill - response is an array, timings are in the last element
-			// see #463
-			if strings.HasPrefix(request.URL.Path, "/infill") {
-				if arr := parsed.Array(); len(arr) > 0 {
-					timings = arr[len(arr)-1].Get("timings")
-				}
-			}
+			usage, timings := findMetricsPayload(parsed, request.URL.Path)
 
 			if usage.Exists() || timings.Exists() {
 				if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings); err != nil {
@@ -423,7 +414,7 @@ func (mp *metricsMonitor) wrapHandler(
 	return nil
 }
 
-func processStreamingResponse(modelID string, start time.Time, body []byte) (ActivityLogEntry, error) {
+func processStreamingResponse(modelID, reqPath string, start time.Time, body []byte) (ActivityLogEntry, error) {
 	// Iterate **backwards** through the body looking for the data payload with
 	// usage data. This avoids allocating a slice of all lines via bytes.Split.
 
@@ -463,13 +454,7 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 
 		if gjson.ValidBytes(data) {
 			parsed := gjson.ParseBytes(data)
-			usage := parsed.Get("usage")
-			timings := parsed.Get("timings")
-
-			// v1/responses format nests usage under response.usage
-			if !usage.Exists() {
-				usage = parsed.Get("response.usage")
-			}
+			usage, timings := findMetricsPayload(parsed, reqPath)
 
 			if usage.Exists() || timings.Exists() {
 				return parseMetrics(modelID, start, usage, timings)
@@ -478,6 +463,38 @@ func processStreamingResponse(modelID string, start time.Time, body []byte) (Act
 	}
 
 	return ActivityLogEntry{}, fmt.Errorf("no valid JSON data found in stream")
+}
+
+func findMetricsPayload(parsed gjson.Result, reqPath string) (gjson.Result, gjson.Result) {
+	candidates := []gjson.Result{parsed}
+	if data := parsed.Get("data"); data.Exists() {
+		candidates = append(candidates, data)
+	}
+	if response := parsed.Get("response"); response.Exists() {
+		candidates = append(candidates, response)
+	}
+	if response := parsed.Get("data.response"); response.Exists() {
+		candidates = append(candidates, response)
+	}
+
+	for _, candidate := range candidates {
+		usage := candidate.Get("usage")
+		timings := candidate.Get("timings")
+
+		// extract timings for infill - response is an array, timings are in the last element
+		// see #463
+		if strings.HasPrefix(reqPath, "/infill") {
+			if arr := candidate.Array(); len(arr) > 0 {
+				timings = arr[len(arr)-1].Get("timings")
+			}
+		}
+
+		if usage.Exists() || timings.Exists() {
+			return usage, timings
+		}
+	}
+
+	return gjson.Result{}, gjson.Result{}
 }
 
 func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) (ActivityLogEntry, error) {

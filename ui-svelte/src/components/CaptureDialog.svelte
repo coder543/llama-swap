@@ -94,8 +94,73 @@
     content: string;
   }
 
+  function appendResponseOutput(result: SSEChat, response: unknown): SSEChat {
+    const next = { ...result };
+    const record = response as
+      | {
+          output?: Array<{
+            type?: string;
+            content?: Array<{ type?: string; text?: string }>;
+          }>;
+          choices?: Array<{
+            message?: {
+              content?: string | Array<{ type?: string; text?: string }>;
+              reasoning_content?: string;
+            };
+          }>;
+          output_text?: string;
+        }
+      | undefined;
+
+    if (!record) return next;
+
+    if (typeof record.output_text === "string") {
+      next.content += record.output_text;
+    }
+
+    for (const choice of record.choices || []) {
+      const message = choice.message;
+      if (!message) continue;
+
+      if (typeof message.reasoning_content === "string") {
+        next.reasoning += message.reasoning_content;
+      }
+      if (typeof message.content === "string") {
+        next.content += message.content;
+      } else {
+        for (const part of message.content || []) {
+          if (part?.type === "text" && typeof part.text === "string") {
+            next.content += part.text;
+          }
+        }
+      }
+    }
+
+    for (const item of record.output || []) {
+      if (item?.type === "reasoning") {
+        for (const part of item.content || []) {
+          if (typeof part?.text === "string") {
+            next.reasoning += part.text;
+          }
+        }
+      }
+      if (item?.type === "message") {
+        for (const part of item.content || []) {
+          if (part?.type === "output_text" && typeof part.text === "string") {
+            next.content += part.text;
+          }
+        }
+      }
+    }
+
+    return next;
+  }
+
   function parseSSEChat(text: string): SSEChat {
     const result: SSEChat = { reasoning: "", content: "" };
+    const seenReasoningDeltaItems = new Set<string>();
+    const seenContentDeltaItems = new Set<string>();
+
     for (const line of text.split("\n")) {
       const trimmed = line.trim();
       if (!trimmed || !trimmed.startsWith("data: ")) continue;
@@ -107,6 +172,50 @@
         if (delta?.content) result.content += delta.content;
         if (delta?.reasoning_content) result.reasoning += delta.reasoning_content;
         if (delta?.reasoning) result.reasoning += delta.reasoning;
+
+        const eventType = parsed.event || parsed.type;
+        if (
+          eventType === "response.reasoning_text.delta" &&
+          typeof parsed.data?.delta === "string"
+        ) {
+          result.reasoning += parsed.data.delta;
+          if (typeof parsed.data?.item_id === "string") {
+            seenReasoningDeltaItems.add(parsed.data.item_id);
+          }
+        }
+        if (
+          eventType === "response.output_text.delta" &&
+          typeof parsed.data?.delta === "string"
+        ) {
+          result.content += parsed.data.delta;
+          if (typeof parsed.data?.item_id === "string") {
+            seenContentDeltaItems.add(parsed.data.item_id);
+          }
+        }
+        if (
+          eventType === "response.output_text.done" &&
+          typeof parsed.data?.text === "string" &&
+          typeof parsed.data?.item_id === "string" &&
+          !seenContentDeltaItems.has(parsed.data.item_id)
+        ) {
+          result.content += parsed.data.text;
+        }
+        if (
+          eventType === "response.reasoning_text.done" &&
+          typeof parsed.data?.text === "string" &&
+          typeof parsed.data?.item_id === "string" &&
+          !seenReasoningDeltaItems.has(parsed.data.item_id)
+        ) {
+          result.reasoning += parsed.data.text;
+        }
+        if (
+          eventType === "response.completed" &&
+          parsed.data?.response &&
+          !result.reasoning &&
+          !result.content
+        ) {
+          return appendResponseOutput(result, parsed.data.response);
+        }
       } catch {
         // skip unparseable lines
       }

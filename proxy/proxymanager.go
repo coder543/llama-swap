@@ -720,6 +720,25 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 	originalPath := c.Request.URL.Path
 	c.Request.URL.Path = remainingPath
 
+	if c.Request.Method == http.MethodPost && strings.Contains(c.GetHeader("Content-Type"), "application/json") {
+		bodyBytes, err := io.ReadAll(c.Request.Body)
+		if err != nil {
+			pm.sendErrorResponse(c, http.StatusBadRequest, "could not read request body")
+			return
+		}
+
+		bodyBytes, err = pm.applyLocalModelRequestFilters(bodyBytes, modelID, searchModelName)
+		if err != nil {
+			pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		c.Request.Header.Del("transfer-encoding")
+		c.Request.Header.Set("content-length", strconv.Itoa(len(bodyBytes)))
+		c.Request.ContentLength = int64(len(bodyBytes))
+	}
+
 	// attempt to record metrics if it is a POST request
 	if pm.metricsMonitor != nil && c.Request.Method == "POST" {
 		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, captureNone, handler); err != nil {
@@ -767,51 +786,10 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 				localHandler = processGroup.ProxyRequest
 			}
 
-			// issue #69 allow custom model names to be sent to upstream
-			useModelName := pm.config.Models[modelID].UseModelName
-			if useModelName != "" {
-				bodyBytes, err = sjson.SetBytes(bodyBytes, "model", useModelName)
-				if err != nil {
-					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error rewriting model name in JSON: %s", err.Error()))
-					return
-				}
-			}
-
-			// issue #174 strip parameters from the JSON body
-			stripParams, err := pm.config.Models[modelID].Filters.SanitizedStripParams()
-			if err != nil { // just log it and continue
-				pm.proxyLogger.Errorf("Error sanitizing strip params string: %s, %s", pm.config.Models[modelID].Filters.StripParams, err.Error())
-			} else {
-				for _, param := range stripParams {
-					pm.proxyLogger.Debugf("<%s> stripping param: %s", modelID, param)
-					bodyBytes, err = sjson.DeleteBytes(bodyBytes, param)
-					if err != nil {
-						pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error deleting parameter %s from request", param))
-						return
-					}
-				}
-			}
-
-			// issue #453 set/override parameters in the JSON body
-			setParams, setParamKeys := pm.config.Models[modelID].Filters.SanitizedSetParams()
-			for _, key := range setParamKeys {
-				pm.proxyLogger.Debugf("<%s> setting param: %s", modelID, key)
-				bodyBytes, err = sjson.SetBytes(bodyBytes, key, setParams[key])
-				if err != nil {
-					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error setting parameter %s in request", key))
-					return
-				}
-			}
-
-			// setParamsByID: set params based on the requested model ID (runs after setParams, can override it)
-			setParamsByIDParams, setParamsByIDKeys := pm.config.Models[modelID].Filters.SanitizedSetParamsByID(requestedModel)
-			for _, key := range setParamsByIDKeys {
-				pm.proxyLogger.Debugf("<%s> setting param by id: %s", requestedModel, key)
-				bodyBytes, err = sjson.SetBytes(bodyBytes, key, setParamsByIDParams[key])
-				if err != nil {
-					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error setting parameter %s in request", key))
-					return
-				}
+			bodyBytes, err = pm.applyLocalModelRequestFilters(bodyBytes, modelID, requestedModel)
+			if err != nil {
+				pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
+				return
 			}
 
 			pm.proxyLogger.Debugf("ProxyManager using local Process for model: %s", requestedModel)
@@ -880,6 +858,55 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 			}
 		}
 	}
+}
+
+func (pm *ProxyManager) applyLocalModelRequestFilters(bodyBytes []byte, modelID string, requestedModel string) ([]byte, error) {
+	var err error
+
+	// issue #69 allow custom model names to be sent to upstream
+	useModelName := pm.config.Models[modelID].UseModelName
+	if useModelName != "" {
+		bodyBytes, err = sjson.SetBytes(bodyBytes, "model", useModelName)
+		if err != nil {
+			return nil, fmt.Errorf("error rewriting model name in JSON: %s", err.Error())
+		}
+	}
+
+	// issue #174 strip parameters from the JSON body
+	stripParams, err := pm.config.Models[modelID].Filters.SanitizedStripParams()
+	if err != nil {
+		pm.proxyLogger.Errorf("Error sanitizing strip params string: %s, %s", pm.config.Models[modelID].Filters.StripParams, err.Error())
+	} else {
+		for _, param := range stripParams {
+			pm.proxyLogger.Debugf("<%s> stripping param: %s", modelID, param)
+			bodyBytes, err = sjson.DeleteBytes(bodyBytes, param)
+			if err != nil {
+				return nil, fmt.Errorf("error deleting parameter %s from request", param)
+			}
+		}
+	}
+
+	// issue #453 set/override parameters in the JSON body
+	setParams, setParamKeys := pm.config.Models[modelID].Filters.SanitizedSetParams()
+	for _, key := range setParamKeys {
+		pm.proxyLogger.Debugf("<%s> setting param: %s", modelID, key)
+		bodyBytes, err = sjson.SetBytes(bodyBytes, key, setParams[key])
+		if err != nil {
+			return nil, fmt.Errorf("error setting parameter %s in request", key)
+		}
+	}
+
+	// setParamsByID runs after setParams so aliases can override defaults.
+	setParamsByIDParams, setParamsByIDKeys := pm.config.Models[modelID].Filters.SanitizedSetParamsByID(requestedModel)
+	for _, key := range setParamsByIDKeys {
+		pm.proxyLogger.Debugf("<%s> setting param by id: %s", requestedModel, key)
+		bodyBytes, err = sjson.SetBytes(bodyBytes, key, setParamsByIDParams[key])
+		if err != nil {
+			return nil, fmt.Errorf("error setting parameter %s in request", key)
+		}
+	}
+
+	return bodyBytes, nil
 }
 
 // mkPostFormHandler creates a POST form handler for inference backends
