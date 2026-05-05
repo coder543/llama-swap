@@ -732,6 +732,14 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 			pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
 			return
 		}
+		bodyBytes, removedTools, err := filterUnsupportedOpenAITools(bodyBytes, remainingPath)
+		if err != nil {
+			pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		if removedTools > 0 {
+			pm.proxyLogger.Debugf("<%s> stripped %d unsupported OpenAI tool(s) for %s", modelID, removedTools, remainingPath)
+		}
 
 		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		c.Request.Header.Del("transfer-encoding")
@@ -791,6 +799,15 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 				pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
 				return
 			}
+			var removedTools int
+			bodyBytes, removedTools, err = filterUnsupportedOpenAITools(bodyBytes, c.Request.URL.Path)
+			if err != nil {
+				pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if removedTools > 0 {
+				pm.proxyLogger.Debugf("<%s> stripped %d unsupported OpenAI tool(s) for %s", modelID, removedTools, c.Request.URL.Path)
+			}
 
 			pm.proxyLogger.Debugf("ProxyManager using local Process for model: %s", requestedModel)
 			nextHandler = localHandler
@@ -821,6 +838,15 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 					pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error setting parameter %s in request", key))
 					return
 				}
+			}
+			var removedTools int
+			bodyBytes, removedTools, err = filterUnsupportedOpenAITools(bodyBytes, c.Request.URL.Path)
+			if err != nil {
+				pm.sendErrorResponse(c, http.StatusInternalServerError, err.Error())
+				return
+			}
+			if removedTools > 0 {
+				pm.proxyLogger.Debugf("<%s> stripped %d unsupported OpenAI tool(s) for %s", requestedModel, removedTools, c.Request.URL.Path)
 			}
 
 			nextHandler = pm.peerProxy.ProxyRequest

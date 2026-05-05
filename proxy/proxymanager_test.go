@@ -1132,6 +1132,84 @@ models:
 	}
 }
 
+func TestProxyManager_FiltersUnsupportedOpenAITools(t *testing.T) {
+	cfg := testConfigFromYAML(t, `
+healthCheckTimeout: 15
+logLevel: error
+models:
+  model1:
+    cmd: {{RESPONDER}} --port ${PORT} --silent --respond model1
+`)
+
+	proxy := New(cfg)
+	defer proxy.StopProcesses(StopWaitForInflightRequest)
+	injectTestHandlers(proxy, nil)
+
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "responses",
+			path: "/v1/responses",
+			body: `{
+				"model":"model1",
+				"input":"hello",
+				"tools":[
+					{"type":"function","name":"kept","parameters":{}},
+					{"type":"web_search"},
+					{"type":"image_generation","output_format":"png"},
+					{"type":"namespace","name":"mcp__server","tools":[]}
+				]
+			}`,
+		},
+		{
+			name: "chat completions",
+			path: "/v1/chat/completions",
+			body: `{
+				"model":"model1",
+				"messages":[{"role":"user","content":"hello"}],
+				"tools":[
+					{"type":"function","function":{"name":"kept","parameters":{}}},
+					{"type":"web_search"},
+					{"type":"namespace","name":"mcp__server","tools":[]}
+				]
+			}`,
+		},
+		{
+			name: "upstream chat completions",
+			path: "/upstream/model1/v1/chat/completions",
+			body: `{
+				"model":"model1",
+				"messages":[{"role":"user","content":"hello"}],
+				"tools":[
+					{"type":"function","function":{"name":"kept","parameters":{}}},
+					{"type":"web_search"},
+					{"type":"namespace","name":"mcp__server","tools":[]}
+				]
+			}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("POST", tt.path, bytes.NewBufferString(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := CreateTestResponseRecorder()
+
+			proxy.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var response map[string]interface{}
+			assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+			requestBody, _ := response["request_body"].(string)
+			assert.Equal(t, int64(1), gjson.Get(requestBody, "tools.#").Int())
+			assert.Equal(t, "function", gjson.Get(requestBody, "tools.0.type").String())
+		})
+	}
+}
+
 func TestProxyManager_HealthEndpoint(t *testing.T) {
 	cfg := testConfigFromYAML(t, `
 healthCheckTimeout: 15

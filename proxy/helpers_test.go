@@ -186,6 +186,19 @@ func newTestHandler(respond string) http.Handler {
 		}
 	})
 
+	mux.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+		bodyBytes, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"responseMessage":  respond,
+			"h_content_length": r.Header.Get("Content-Length"),
+			"request_body":     string(bodyBytes),
+			"usage": map[string]any{
+				"completion_tokens": 10, "prompt_tokens": 25, "total_tokens": 35,
+			},
+		})
+	})
+
 	mux.HandleFunc("/v1/audio/speech", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		modelName := gjson.GetBytes(body, "model").String()
