@@ -749,7 +749,7 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 
 	// attempt to record metrics if it is a POST request
 	if pm.metricsMonitor != nil && c.Request.Method == "POST" {
-		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, captureNone, handler); err != nil {
+		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, upstreamCaptureFields(remainingPath), handler); err != nil {
 			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying metrics wrapped request: %s", err.Error()))
 			pm.proxyLogger.Errorf("Error proxying wrapped upstream request for model %s, path=%s", modelID, originalPath)
 			return
@@ -760,6 +760,26 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 			pm.proxyLogger.Errorf("Error proxying upstream request for model %s, path=%s", modelID, originalPath)
 			return
 		}
+	}
+}
+
+func upstreamCaptureFields(path string) captureFields {
+	switch path {
+	case "/v1/chat/completions",
+		"/v1/responses",
+		"/v1/completions",
+		"/v1/messages",
+		"/v1/messages/count_tokens",
+		"/v1/embeddings",
+		"/reranking",
+		"/rerank",
+		"/v1/rerank",
+		"/v1/reranking",
+		"/infill",
+		"/completion":
+		return captureAll
+	default:
+		return captureNone
 	}
 }
 

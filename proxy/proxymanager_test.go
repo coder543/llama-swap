@@ -1893,3 +1893,40 @@ models:
 	assert.Nil(t, capture.ReqBody)
 	assert.NotNil(t, capture.RespBody)
 }
+
+func TestProxyManager_UpstreamChatCompletionsCapture(t *testing.T) {
+	cfg := testConfigFromYAML(t, `
+healthCheckTimeout: 15
+logLevel: error
+captureBuffer: 5
+models:
+  model1:
+    cmd: {{RESPONDER}} --port ${PORT} --silent --respond model1
+`)
+
+	proxy := New(cfg)
+	defer proxy.StopProcesses(StopWaitForInflightRequest)
+	injectTestHandlers(proxy, nil)
+
+	reqBody := `{"model":"model1","messages":[{"role":"user","content":"hello from ui"}],"stream":false}`
+	req := httptest.NewRequest("POST", "/upstream/model1/v1/chat/completions", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer mysecret")
+	rec := CreateTestResponseRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	metrics := proxy.metricsMonitor.getMetrics()
+	assert.Equal(t, 1, len(metrics))
+	assert.True(t, metrics[0].HasCapture)
+	assert.Equal(t, "/v1/chat/completions", metrics[0].ReqPath)
+
+	capture := proxy.metricsMonitor.getCaptureByID(metrics[0].ID)
+	assert.NotNil(t, capture)
+	assert.Equal(t, "/v1/chat/completions", capture.ReqPath)
+	assert.JSONEq(t, reqBody, string(capture.ReqBody))
+	assert.NotEmpty(t, capture.RespBody)
+	assert.Equal(t, "[REDACTED]", capture.ReqHeaders["Authorization"])
+}
