@@ -17,6 +17,8 @@
     | "cached"
     | "prompt"
     | "generated"
+    | "reasoning"
+    | "output"
     | "prompt_speed"
     | "gen_speed"
     | "duration"
@@ -38,6 +40,8 @@
     { key: "cached", label: "Cached", defaultVisible: true },
     { key: "prompt", label: "Prompt", defaultVisible: true },
     { key: "generated", label: "Generated", defaultVisible: true },
+    { key: "reasoning", label: "Reasoning", defaultVisible: false },
+    { key: "output", label: "Output", defaultVisible: false },
     { key: "prompt_speed", label: "Prompt Speed", defaultVisible: true },
     { key: "gen_speed", label: "Gen Speed", defaultVisible: true },
     { key: "duration", label: "Duration", defaultVisible: true },
@@ -215,6 +219,16 @@
           {#if $visibleColumns.includes("generated")}
             <th class="px-6 py-3">Generated</th>
           {/if}
+          {#if $visibleColumns.includes("reasoning")}
+            <th class="px-6 py-3">
+              Reasoning <Tooltip content="reasoning / thinking tokens" />
+            </th>
+          {/if}
+          {#if $visibleColumns.includes("output")}
+            <th class="px-6 py-3">
+              Output <Tooltip content="non-reasoning output tokens" />
+            </th>
+          {/if}
           {#if $visibleColumns.includes("prompt_speed")}
             <th class="px-6 py-3">Prompt Speed</th>
           {/if}
@@ -264,6 +278,12 @@
                 <td class="px-6 py-4">{metric.tokens.input_tokens.toLocaleString()}</td>
               {/if}
               {#if $visibleColumns.includes("generated")}
+                <td class="px-6 py-4">{metric.tokens.generated_tokens.toLocaleString()}</td>
+              {/if}
+              {#if $visibleColumns.includes("reasoning")}
+                <td class="px-6 py-4">{metric.tokens.reasoning_tokens > 0 ? metric.tokens.reasoning_tokens.toLocaleString() : "-"}</td>
+              {/if}
+              {#if $visibleColumns.includes("output")}
                 <td class="px-6 py-4">{metric.tokens.output_tokens.toLocaleString()}</td>
               {/if}
               {#if $visibleColumns.includes("prompt_speed")}

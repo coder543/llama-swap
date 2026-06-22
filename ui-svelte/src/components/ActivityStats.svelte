@@ -10,6 +10,8 @@
   let stats = $derived.by(() => {
     const totalRequests = $metrics.length;
     const totalInputTokens = $metrics.reduce((sum, m) => sum + m.tokens.input_tokens, 0);
+    const totalGeneratedTokens = $metrics.reduce((sum, m) => sum + m.tokens.generated_tokens, 0);
+    const totalReasoningTokens = $metrics.reduce((sum, m) => sum + m.tokens.reasoning_tokens, 0);
     const totalOutputTokens = $metrics.reduce((sum, m) => sum + m.tokens.output_tokens, 0);
     const totalCacheTokens = $metrics.reduce((sum, m) => sum + m.tokens.cache_tokens, 0);
 
@@ -26,6 +28,8 @@
     return {
       totalRequests,
       totalInputTokens,
+      totalGeneratedTokens,
+      totalReasoningTokens,
       totalOutputTokens,
       totalCacheTokens,
       inFlightRequests: $inFlightRequests,
@@ -75,11 +79,12 @@
       </div>
     </div>
   {/if}
-  <div class="grid grid-cols-4 gap-x-6 gap-y-1 text-sm">
+  <div class="grid grid-cols-5 gap-x-6 gap-y-1 text-sm">
     <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Requests</div>
     <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Cached</div>
     <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Processed</div>
     <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Generated</div>
+    <div class="text-xs uppercase tracking-wider text-gray-500 dark:text-gray-400">Output</div>
     <div class="text-sm text-gray-700 dark:text-gray-300">
       <span class="font-semibold">{nf.format(stats.totalRequests)}</span> completed,
       <span class="font-semibold">{nf.format(stats.inFlightRequests)}</span> waiting
@@ -89,6 +94,16 @@
     </div>
     <div class="text-sm text-gray-700 dark:text-gray-300">
       <span class="font-semibold">{nf.format(stats.totalInputTokens)}</span> tokens
+    </div>
+    <div class="text-sm text-gray-700 dark:text-gray-300">
+      {#if stats.totalReasoningTokens > 0}
+        <span class="font-semibold">{nf.format(stats.totalGeneratedTokens)}</span> tokens
+        <span class="text-gray-500 dark:text-gray-400"> (</span>
+        <span class="text-amber-600 dark:text-amber-400">{nf.format(stats.totalReasoningTokens)}</span>
+        <span class="text-gray-500 dark:text-gray-400"> reasoning)</span>
+      {:else}
+        <span class="font-semibold">{nf.format(stats.totalGeneratedTokens)}</span> tokens
+      {/if}
     </div>
     <div class="text-sm text-gray-700 dark:text-gray-300">
       <span class="font-semibold">{nf.format(stats.totalOutputTokens)}</span> tokens

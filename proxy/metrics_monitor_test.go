@@ -203,7 +203,7 @@ func TestMetricsMonitor_WrapHandler(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -239,7 +239,7 @@ func TestMetricsMonitor_WrapHandler(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -278,7 +278,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -302,7 +302,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -326,7 +326,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -350,7 +350,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err) // Errors after response is sent are logged, not returned
 
 		metrics := mm.getMetrics()
@@ -372,7 +372,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.Equal(t, expectedErr, err)
 
 		metrics := mm.getMetrics()
@@ -395,7 +395,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -434,7 +434,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -464,7 +464,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -643,7 +643,7 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -678,7 +678,7 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -713,7 +713,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -742,7 +742,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -771,7 +771,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -803,7 +803,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -841,7 +841,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -868,7 +868,7 @@ data: [DONE]
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -950,7 +950,7 @@ func TestMetricsMonitor_WrapHandler_Compression(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -984,7 +984,7 @@ func TestMetricsMonitor_WrapHandler_Compression(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -1012,7 +1012,7 @@ func TestMetricsMonitor_WrapHandler_Compression(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err) // Should not return error, just log warning
 
 		metrics := mm.getMetrics()
@@ -1039,7 +1039,7 @@ func TestMetricsMonitor_WrapHandler_Compression(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		metrics := mm.getMetrics()
@@ -1251,7 +1251,7 @@ func TestMetricsMonitor_WrapHandler_Capture(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		// Check metric was recorded
@@ -1289,7 +1289,7 @@ func TestMetricsMonitor_WrapHandler_Capture(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		// Metrics should still be recorded
@@ -1321,7 +1321,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqHeaders, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqHeaders, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1340,7 +1340,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqBody, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqBody, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1357,7 +1357,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespHeaders, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespHeaders, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1375,7 +1375,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespBody, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespBody, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1394,7 +1394,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1412,7 +1412,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespAll, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureRespAll, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1431,7 +1431,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureFields(0), nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureFields(0), "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1450,7 +1450,7 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 
-		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqHeaders|captureRespBody, nextHandler)
+		err := mm.wrapHandler("test-model", ginCtx.Writer, req, captureReqHeaders|captureRespBody, "", nextHandler)
 		assert.NoError(t, err)
 
 		capture := mm.getCaptureByID(mm.getMetrics()[0].ID)
@@ -1460,5 +1460,77 @@ func TestMetricsMonitor_WrapHandler_PartialCaptures(t *testing.T) {
 		assert.Nil(t, capture.ReqBody)
 		assert.Nil(t, capture.RespHeaders)
 		assert.Equal(t, []byte(responseBody), capture.RespBody)
+	})
+}
+
+func TestExtractReasoningContent(t *testing.T) {
+	t.Run("extracts from OpenAI format", func(t *testing.T) {
+		body := []byte(`{"choices":[{"message":{"role":"assistant","content":"Answer","reasoning_content":"Let me think..."}}]}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "Let me think...", result)
+	})
+
+	t.Run("extracts from Anthropic format", func(t *testing.T) {
+		body := []byte(`{"content":[{"type":"thinking","text":"thinking here"},{"type":"text","text":"answer"}]}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "thinking here", result)
+	})
+
+	t.Run("extracts from native format", func(t *testing.T) {
+		body := []byte(`{"content":"Answer","reasoning_content":"native reasoning"}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "native reasoning", result)
+	})
+
+	t.Run("returns empty for no reasoning", func(t *testing.T) {
+		body := []byte(`{"choices":[{"message":{"role":"assistant","content":"Answer"}}]}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "", result)
+	})
+
+	t.Run("returns empty for invalid JSON", func(t *testing.T) {
+		body := []byte(`not json`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "", result)
+	})
+}
+
+func TestExtractStreamingReasoningContent(t *testing.T) {
+	t.Run("accumulates reasoning from SSE events", func(t *testing.T) {
+		body := []byte(
+			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"part1\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"part2\"}}]}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "part1part2", result)
+	})
+
+	t.Run("extracts Anthropic streaming reasoning", func(t *testing.T) {
+		body := []byte(
+			"data: {\"delta\":{\"reasoning_content\":\"anthropic reasoning\"}}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "anthropic reasoning", result)
+	})
+
+	t.Run("extracts Anthropic thinking delta", func(t *testing.T) {
+		body := []byte(
+			"data: {\"delta\":{\"thinking\":\"thinking delta\"}}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "thinking delta", result)
+	})
+
+	t.Run("returns empty for no reasoning", func(t *testing.T) {
+		body := []byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"just content\"}}]}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "", result)
 	})
 }

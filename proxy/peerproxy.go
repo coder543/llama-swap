@@ -126,6 +126,19 @@ func (p *PeerProxy) ListPeers() config.PeerDictionaryConfig {
 	return p.peers
 }
 
+// GetPeerProxyURL returns the upstream proxy URL for a peer model, or empty string if not found.
+func (p *PeerProxy) GetPeerProxyURL(modelID string) string {
+	pp, found := p.proxyMap[modelID]
+	if !found {
+		return ""
+	}
+	peer, found := p.peers[pp.peerID]
+	if !found {
+		return ""
+	}
+	return peer.Proxy
+}
+
 func (p *PeerProxy) ProxyRequest(model_id string, writer http.ResponseWriter, request *http.Request) error {
 	pp, found := p.proxyMap[model_id]
 	if !found {

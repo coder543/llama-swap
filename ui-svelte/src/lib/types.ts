@@ -15,6 +15,8 @@ export interface Model {
 export interface TokenMetrics {
   cache_tokens: number;
   input_tokens: number;
+  generated_tokens: number;
+  reasoning_tokens: number;
   output_tokens: number;
   prompt_per_second: number;
   tokens_per_second: number;

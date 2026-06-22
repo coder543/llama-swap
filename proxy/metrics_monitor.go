@@ -75,6 +75,8 @@ func decompressCapture(data []byte) (*ReqRespCapture, error) {
 type TokenMetrics struct {
 	CachedTokens    int     `json:"cache_tokens"`
 	InputTokens     int     `json:"input_tokens"`
+	GeneratedTokens int     `json:"generated_tokens"`
+	ReasoningTokens int     `json:"reasoning_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
@@ -122,6 +124,17 @@ type metricsMonitor struct {
 	// capture fields
 	enableCaptures bool
 	captureCache   *cache.Cache // zstd-compressed CBOR of ReqRespCapture
+
+	// upstreamURLFunc returns the upstream llama-server URL for a model ID.
+	// Used to call the /tokenize endpoint for reasoning token counts.
+	upstreamURLFunc func(modelID string) string
+}
+
+// SetUpstreamURLFunc sets the callback that resolves a model ID to its
+// upstream llama-server base URL. This is needed to tokenize reasoning
+// content for per-category token counts.
+func (mp *metricsMonitor) SetUpstreamURLFunc(fn func(modelID string) string) {
+	mp.upstreamURLFunc = fn
 }
 
 // newMetricsMonitor creates a new metricsMonitor. captureBufferMB is the
@@ -260,6 +273,7 @@ const (
 
 // wrapHandler wraps the proxy handler to extract token metrics.
 // captureFields controls what is saved in the ReqRespCapture using bitwise flags.
+// upstreamURL is the base URL of the upstream llama-server (for tokenize calls).
 // if wrapHandler returns an error it is safe to assume that no
 // data was sent to the client
 func (mp *metricsMonitor) wrapHandler(
@@ -267,6 +281,7 @@ func (mp *metricsMonitor) wrapHandler(
 	writer gin.ResponseWriter,
 	request *http.Request,
 	captureFields captureFields,
+	upstreamURL string,
 	next func(modelID string, w http.ResponseWriter, r *http.Request) error,
 ) error {
 	// Capture request body and headers if captures enabled
@@ -411,6 +426,11 @@ func (mp *metricsMonitor) wrapHandler(
 
 	mp.emitMetric(tm)
 
+	// Async: tokenize reasoning content and update reasoning/output split
+	if upstreamURL != "" {
+		go mp.updateReasoningTokens(metricID, modelID, upstreamURL)
+	}
+
 	return nil
 }
 
@@ -553,12 +573,205 @@ func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) 
 		Tokens: TokenMetrics{
 			CachedTokens:    cachedTokens,
 			InputTokens:     inputTokens,
+			GeneratedTokens: outputTokens,
+			ReasoningTokens: 0,
 			OutputTokens:    outputTokens,
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
 		},
 		DurationMs: durationMs,
 	}, nil
+}
+
+// extractReasoningContent extracts reasoning content from a JSON response body.
+// Checks OpenAI, Anthropic, and native llama.cpp response formats.
+func extractReasoningContent(body []byte) string {
+	if !gjson.ValidBytes(body) {
+		return ""
+	}
+	parsed := gjson.ParseBytes(body)
+
+	// OpenAI format: choices[0].message.reasoning_content
+	if rc := parsed.Get("choices.0.message.reasoning_content"); rc.Exists() {
+		return rc.String()
+	}
+
+	// Anthropic format: content[].text where type is thinking
+	if contentArr := parsed.Get("content"); contentArr.Exists() {
+		for _, item := range contentArr.Array() {
+			if item.Get("type").String() == "thinking" {
+				if text := item.Get("text"); text.Exists() {
+					return text.String()
+				}
+			}
+		}
+	}
+
+	// Native llama.cpp format: reasoning_content at root
+	if rc := parsed.Get("reasoning_content"); rc.Exists() {
+		return rc.String()
+	}
+
+	return ""
+}
+
+// extractStreamingReasoningContent iterates through SSE events and accumulates
+// all reasoning_content fragments.
+func extractStreamingReasoningContent(body []byte) string {
+	var reasoningParts []string
+
+	pos := len(body)
+	for pos > 0 {
+		lineStart := bytes.LastIndexByte(body[:pos], '\n')
+		if lineStart == -1 {
+			lineStart = 0
+		} else {
+			lineStart++
+		}
+
+		line := bytes.TrimSpace(body[lineStart:pos])
+		pos = lineStart - 1
+
+		if len(line) == 0 {
+			continue
+		}
+
+		prefix := []byte("data:")
+		if !bytes.HasPrefix(line, prefix) {
+			continue
+		}
+		data := bytes.TrimSpace(line[len(prefix):])
+
+		if len(data) == 0 || bytes.Equal(data, []byte("[DONE]")) {
+			continue
+		}
+
+		if !gjson.ValidBytes(data) {
+			continue
+		}
+
+		parsed := gjson.ParseBytes(data)
+
+		// OpenAI streaming: choices[0].delta.reasoning_content
+		if rc := parsed.Get("choices.0.delta.reasoning_content"); rc.Exists() && rc.String() != "" {
+			reasoningParts = append(reasoningParts, rc.String())
+		}
+
+		// Anthropic streaming: delta.reasoning_content or delta.thinking
+		if rc := parsed.Get("delta.reasoning_content"); rc.Exists() && rc.String() != "" {
+			reasoningParts = append(reasoningParts, rc.String())
+		}
+		if rc := parsed.Get("delta.thinking"); rc.Exists() && rc.String() != "" {
+			reasoningParts = append(reasoningParts, rc.String())
+		}
+	}
+
+	// Reverse parts since we iterated backwards through the stream
+	for i, j := 0, len(reasoningParts)-1; i < j; i, j = i+1, j-1 {
+		reasoningParts[i], reasoningParts[j] = reasoningParts[j], reasoningParts[i]
+	}
+	return strings.Join(reasoningParts, "")
+}
+
+// tokenizeReasoning calls the upstream /tokenize endpoint to count tokens in
+// reasoning content. Returns the token count or -1 on error.
+func tokenizeReasoning(upstreamURL, reasoningContent string) int {
+	if upstreamURL == "" || reasoningContent == "" {
+		return -1
+	}
+
+	contentJSON, err := json.Marshal(reasoningContent)
+	if err != nil {
+		return -1
+	}
+	reqBody := fmt.Sprintf(`{"content": %s}`, contentJSON)
+	resp, err := http.Post(upstreamURL+"/tokenize", "application/json", bytes.NewBufferString(reqBody))
+	if err != nil {
+		return -1
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return -1
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return -1
+	}
+
+	tokens := gjson.GetBytes(body, "tokens")
+	if tokens.Exists() {
+		return len(tokens.Array())
+	}
+
+	// Fallback: count array length from raw JSON
+	if gjson.ValidBytes(body) {
+		parsed := gjson.ParseBytes(body)
+		if t := parsed.Get("tokens"); t.Exists() {
+			return len(t.Array())
+		}
+	}
+
+	return -1
+}
+
+// updateReasoningTokens extracts reasoning content from a capture, tokenizes it,
+// and updates the metrics entry with the reasoning token count.
+func (mp *metricsMonitor) updateReasoningTokens(entryID int, modelID string, upstreamURL string) {
+	if mp.captureCache == nil {
+		return
+	}
+
+	capture := mp.getCaptureByID(entryID)
+	if capture == nil || len(capture.RespBody) == 0 {
+		return
+	}
+
+	var reasoningContent string
+	isStreaming := strings.Contains(capture.RespHeaders["Content-Type"], "text/event-stream")
+	if isStreaming {
+		reasoningContent = extractStreamingReasoningContent(capture.RespBody)
+	} else {
+		reasoningContent = extractReasoningContent(capture.RespBody)
+	}
+
+	if reasoningContent == "" {
+		return
+	}
+
+	reasoningTokens := tokenizeReasoning(upstreamURL, reasoningContent)
+	if reasoningTokens < 0 {
+		return
+	}
+
+	mp.mu.Lock()
+	// Find the entry by ID
+	var found bool
+	for i := range mp.metrics {
+		if mp.metrics[i].ID == entryID {
+			generated := mp.metrics[i].Tokens.GeneratedTokens
+			mp.metrics[i].Tokens.ReasoningTokens = reasoningTokens
+			mp.metrics[i].Tokens.OutputTokens = generated - reasoningTokens
+			found = true
+			break
+		}
+	}
+	mp.mu.Unlock()
+
+	if !found {
+		return
+	}
+
+	// Read back the updated entry and emit
+	mp.mu.RLock()
+	for i := range mp.metrics {
+		if mp.metrics[i].ID == entryID {
+			mp.emitMetric(mp.metrics[i])
+			break
+		}
+	}
+	mp.mu.RUnlock()
 }
 
 // decompressBody decompresses the body based on Content-Encoding header

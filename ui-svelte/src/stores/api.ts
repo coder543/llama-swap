@@ -91,7 +91,12 @@ export function enableAPIEvents(enabled: boolean): void {
 
           case "metrics": {
             const newMetrics = JSON.parse(message.data) as ActivityLogEntry[];
-            metrics.update((prevMetrics) => [...newMetrics, ...prevMetrics]);
+            metrics.update((prevMetrics) => {
+              // Replace existing entries by ID, prepend new ones
+              const seen = new Set(newMetrics.map((m) => m.id));
+              const existing = prevMetrics.filter((m) => !seen.has(m.id));
+              return [...newMetrics, ...existing];
+            });
             break;
           }
           case "inflight": {

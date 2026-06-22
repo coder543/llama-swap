@@ -749,7 +749,7 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 
 	// attempt to record metrics if it is a POST request
 	if pm.metricsMonitor != nil && c.Request.Method == "POST" {
-		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, upstreamCaptureFields(remainingPath), handler); err != nil {
+		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, upstreamCaptureFields(remainingPath), pm.GetUpstreamURL(modelID), handler); err != nil {
 			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying metrics wrapped request: %s", err.Error()))
 			pm.proxyLogger.Errorf("Error proxying wrapped upstream request for model %s, path=%s", modelID, originalPath)
 			return
@@ -891,7 +891,7 @@ func (pm *ProxyManager) mkProxyJSONHandler(cf captureFields) func(*gin.Context) 
 		c.Request = c.Request.WithContext(ctx)
 
 		if pm.metricsMonitor != nil && c.Request.Method == "POST" {
-			if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, cf, nextHandler); err != nil {
+			if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, cf, pm.GetUpstreamURL(modelID), nextHandler); err != nil {
 				pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying metrics wrapped request: %s", err.Error()))
 				pm.proxyLogger.Errorf("Error Proxying Metrics Wrapped Request model %s", modelID)
 				return
@@ -1084,7 +1084,7 @@ func (pm *ProxyManager) mkPostFormHandler(cf captureFields) func(*gin.Context) {
 
 		// Use the modified request for proxying
 		if pm.metricsMonitor != nil {
-			if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, modifiedReq, cf, nextHandler); err != nil {
+			if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, modifiedReq, cf, pm.GetUpstreamURL(modelID), nextHandler); err != nil {
 				pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying request: %s", err.Error()))
 				pm.proxyLogger.Errorf("Error Proxying Request for model %s", modelID)
 				return
@@ -1275,4 +1275,28 @@ func (pm *ProxyManager) SetVersion(buildDate string, commit string, version stri
 	pm.buildDate = buildDate
 	pm.commit = commit
 	pm.version = version
+}
+
+// GetUpstreamURL returns the upstream llama-server base URL for a model.
+// Returns empty string for peer models or if the model is not found.
+func (pm *ProxyManager) GetUpstreamURL(modelID string) string {
+	if pm.peerProxy != nil && pm.peerProxy.HasPeerModel(modelID) {
+		return pm.peerProxy.GetPeerProxyURL(modelID)
+	}
+
+	if pm.matrix != nil {
+		if process, ok := pm.matrix.GetProcess(modelID); ok {
+			return process.config.Proxy
+		}
+		return ""
+	}
+
+	pm.Lock()
+	defer pm.Unlock()
+	for _, group := range pm.processGroups {
+		if process, ok := group.processes[modelID]; ok {
+			return process.config.Proxy
+		}
+	}
+	return ""
 }
