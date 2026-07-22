@@ -593,6 +593,14 @@ func (pm *ProxyManager) listModelsHandler(c *gin.Context) {
 			record["meta"] = gin.H{
 				"llamaswap": modelConfig.Metadata,
 			}
+
+			// Some OpenAI-compatible clients, including Pool, read a
+			// per-model context length from this top-level extension.
+			// Preserve the canonical llama-swap metadata as well so other
+			// clients can continue to read meta.llamaswap.context_window.
+			if contextLength, ok := modelConfig.Metadata["context_window"]; ok {
+				record["context_length"] = contextLength
+			}
 		}
 		return record
 	}

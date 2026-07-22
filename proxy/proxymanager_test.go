@@ -340,6 +340,7 @@ models:
       TEMP: 0.7
       NAME: "llama"
     metadata:
+      context_window: 262144
       port: ${PORT_NUM}
       temperature: ${TEMP}
       enabled: true
@@ -395,6 +396,8 @@ models:
 	lsmetamap := lsmeta.(map[string]any)
 
 	// Verify type preservation
+	assert.Equal(t, float64(262144), model1Data["context_length"])
+	assert.Equal(t, float64(262144), lsmetamap["context_window"])
 	assert.Equal(t, float64(10001), lsmetamap["port"]) // JSON numbers are float64
 	assert.Equal(t, 0.7, lsmetamap["temperature"])
 	assert.Equal(t, true, lsmetamap["enabled"])
@@ -408,6 +411,8 @@ models:
 	assert.NotNil(t, model2Data)
 	_, exists = model2Data["llamaswap_meta"]
 	assert.False(t, exists, "model2 should not have llamaswap_meta")
+	_, exists = model2Data["context_length"]
+	assert.False(t, exists, "model2 should not have context_length")
 }
 
 func TestProxyManager_ListModelsHandler_SortedByID(t *testing.T) {
@@ -467,6 +472,8 @@ models:
     name: "Model 1"
     aliases:
       - alias1
+    metadata:
+      context_window: 262144
 `)
 
 	proxy := New(cfg)
@@ -515,6 +522,8 @@ models:
 
 	// Name keys should match
 	assert.Equal(t, name1, name2)
+	assert.Equal(t, float64(262144), model1Data["context_length"])
+	assert.Equal(t, float64(262144), alias1Data["context_length"])
 }
 
 func TestProxyManager_Shutdown(t *testing.T) {
