@@ -28,6 +28,7 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 
 ## Local Deployment
 
+- After committing any changes in this repository, always complete this rebuild, install, restart, and verification workflow so the running service uses the latest commit.
 - Build the ARM64 binary, including the embedded UI, with `make linux-arm64`.
 - Install it with `install -m 0755 build/llama-swap-linux-arm64 /home/coder/bin/llama-swap`.
 - The installed instance is a system-level systemd service named `llama-swap.service`; it runs as the `coder` user.
