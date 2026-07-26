@@ -26,6 +26,15 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - Use `make test-all` before completing work. This includes long running concurrency tests.
 - Use `make test-ui` after making changes to the UI in ui-svelte/
 
+## Local Deployment
+
+- Build the ARM64 binary, including the embedded UI, with `make linux-arm64`.
+- Install it with `install -m 0755 build/llama-swap-linux-arm64 /home/coder/bin/llama-swap`.
+- The installed instance is a system-level systemd service named `llama-swap.service`; it runs as the `coder` user.
+- Restart it with `sudo systemctl restart llama-swap.service`.
+- Verify the restart with `systemctl is-active llama-swap.service`, `curl -fsS http://127.0.0.1:8083/health`, and `curl -fsS http://127.0.0.1:8083/api/version`.
+- Restarting llama-swap stops its managed model processes; the next model request may need to wait for a cold start.
+
 ### Commit message example format:
 
 ```
