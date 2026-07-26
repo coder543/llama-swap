@@ -5,6 +5,7 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"encoding/json"
+	"io"
 	"math/rand"
 	"net/http"
 	"net/http/httptest"
@@ -490,16 +491,20 @@ func TestMetricsMonitor_ResponseBodyCopier(t *testing.T) {
 		assert.Equal(t, string(testData), rec.Body.String())
 	})
 
-	t.Run("sets start time on first write", func(t *testing.T) {
+	t.Run("sets start time on creation and tracks writes", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		copier := newBodyCopier(ginCtx.Writer)
 
-		assert.True(t, copier.StartTime().IsZero())
+		assert.False(t, copier.StartTime().IsZero())
+		assert.True(t, copier.FirstWriteTime().IsZero())
+		assert.True(t, copier.LastWriteTime().IsZero())
 
 		copier.Write([]byte("test"))
 
-		assert.False(t, copier.StartTime().IsZero())
+		assert.False(t, copier.FirstWriteTime().IsZero())
+		assert.False(t, copier.LastWriteTime().IsZero())
+		assert.False(t, copier.FirstWriteTime().Before(copier.StartTime()))
 	})
 
 	t.Run("preserves headers", func(t *testing.T) {
@@ -604,7 +609,7 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 			"predicted_ms": 15.0
 		}`)
 
-		metrics, err := parseMetrics("test-model", start, usage, timings)
+		metrics, err := parseMetrics("test-model", start, usage, timings, gjson.Result{})
 		assert.NoError(t, err)
 		assert.Equal(t, 5, metrics.Tokens.InputTokens)
 		assert.Equal(t, 1, metrics.Tokens.OutputTokens)
@@ -684,6 +689,73 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 		metrics := mm.getMetrics()
 		assert.Equal(t, 1, len(metrics))
 		assert.Equal(t, -1, metrics[0].Tokens.CachedTokens) // Default value when not present
+	})
+
+	t.Run("parses vLLM usage details and per-request metrics", func(t *testing.T) {
+		start := time.Now()
+		usage := gjson.Parse(`{
+			"prompt_tokens": 100,
+			"completion_tokens": 21,
+			"prompt_tokens_details": {"cached_tokens": 40},
+			"completion_tokens_details": {"reasoning_tokens": 8}
+		}`)
+		performance := gjson.Parse(`{
+			"time_to_first_token_ms": 20,
+			"generation_time_ms": 400,
+			"queue_time_ms": 75,
+			"mean_itl_ms": 20,
+			"tokens_per_second": 42
+		}`)
+
+		metrics, err := parseMetrics("test-model", start, usage, gjson.Result{}, performance)
+		assert.NoError(t, err)
+		assert.Equal(t, 100, metrics.Tokens.InputTokens)
+		assert.Equal(t, 40, metrics.Tokens.CachedTokens)
+		assert.Equal(t, 21, metrics.Tokens.GeneratedTokens)
+		assert.Equal(t, 8, metrics.Tokens.ReasoningTokens)
+		assert.Equal(t, 13, metrics.Tokens.OutputTokens)
+		assert.InDelta(t, 3000.0, metrics.Tokens.PromptPerSecond, 0.001)
+		assert.InDelta(t, 50.0, metrics.Tokens.TokensPerSecond, 0.001)
+		assert.Equal(t, 495, metrics.DurationMs)
+	})
+
+	t.Run("parses Responses API usage details", func(t *testing.T) {
+		usage := gjson.Parse(`{
+			"input_tokens": 81,
+			"input_tokens_details": {"cached_tokens": 16},
+			"output_tokens": 250,
+			"output_tokens_details": {"reasoning_tokens": 200}
+		}`)
+
+		metrics, err := parseMetrics("test-model", time.Now(), usage, gjson.Result{}, gjson.Result{})
+		assert.NoError(t, err)
+		assert.Equal(t, 16, metrics.Tokens.CachedTokens)
+		assert.Equal(t, 250, metrics.Tokens.GeneratedTokens)
+		assert.Equal(t, 200, metrics.Tokens.ReasoningTokens)
+		assert.Equal(t, 50, metrics.Tokens.OutputTokens)
+	})
+
+	t.Run("estimates missing streaming speeds from observed writes", func(t *testing.T) {
+		start := time.Unix(100, 0)
+		metric := ActivityLogEntry{
+			Tokens: TokenMetrics{
+				InputTokens:     100,
+				CachedTokens:    40,
+				GeneratedTokens: 21,
+				PromptPerSecond: -1,
+				TokensPerSecond: -1,
+			},
+		}
+
+		applyObservedStreamingSpeeds(
+			&metric,
+			start,
+			start.Add(20*time.Millisecond),
+			start.Add(420*time.Millisecond),
+		)
+
+		assert.InDelta(t, 3000.0, metric.Tokens.PromptPerSecond, 0.001)
+		assert.InDelta(t, 50.0, metric.Tokens.TokensPerSecond, 0.001)
 	})
 }
 
@@ -810,7 +882,7 @@ data: [DONE]
 		assert.Equal(t, 1, len(metrics))
 		assert.Equal(t, 80, metrics[0].Tokens.InputTokens)
 		assert.Equal(t, 25, metrics[0].Tokens.OutputTokens)
-		assert.Equal(t, -1.0, metrics[0].Tokens.PromptPerSecond)
+		assert.Greater(t, metrics[0].Tokens.PromptPerSecond, 0.0)
 		assert.Equal(t, -1.0, metrics[0].Tokens.TokensPerSecond)
 	})
 
@@ -1470,6 +1542,26 @@ func TestExtractReasoningContent(t *testing.T) {
 		assert.Equal(t, "Let me think...", result)
 	})
 
+	t.Run("extracts vLLM chat reasoning", func(t *testing.T) {
+		body := []byte(`{"choices":[{"message":{"role":"assistant","content":"Answer","reasoning":"vLLM reasoning"}}]}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "vLLM reasoning", result)
+	})
+
+	t.Run("extracts Responses API reasoning", func(t *testing.T) {
+		body := []byte(`{
+			"output": [{
+				"type": "reasoning",
+				"content": [
+					{"type": "reasoning_text", "text": "part1"},
+					{"type": "reasoning_text", "text": "part2"}
+				]
+			}]
+		}`)
+		result := extractReasoningContent(body)
+		assert.Equal(t, "part1part2", result)
+	})
+
 	t.Run("extracts from Anthropic format", func(t *testing.T) {
 		body := []byte(`{"content":[{"type":"thinking","text":"thinking here"},{"type":"text","text":"answer"}]}`)
 		result := extractReasoningContent(body)
@@ -1525,6 +1617,26 @@ func TestExtractStreamingReasoningContent(t *testing.T) {
 		assert.Equal(t, "thinking delta", result)
 	})
 
+	t.Run("extracts vLLM chat reasoning", func(t *testing.T) {
+		body := []byte(
+			"data: {\"choices\":[{\"delta\":{\"reasoning\":\"part1\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"reasoning\":\"part2\"}}]}\n\n" +
+				"data: [DONE]\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "part1part2", result)
+	})
+
+	t.Run("extracts Responses API reasoning", func(t *testing.T) {
+		body := []byte(
+			"event: response.reasoning_text.delta\n" +
+				"data: {\"type\":\"response.reasoning_text.delta\",\"delta\":\"part1\"}\n\n" +
+				"data: {\"event\":\"response.reasoning_text.delta\",\"data\":{\"type\":\"response.reasoning_text.delta\",\"delta\":\"part2\"}}\n\n",
+		)
+		result := extractStreamingReasoningContent(body)
+		assert.Equal(t, "part1part2", result)
+	})
+
 	t.Run("returns empty for no reasoning", func(t *testing.T) {
 		body := []byte(
 			"data: {\"choices\":[{\"delta\":{\"content\":\"just content\"}}]}\n\n" +
@@ -1533,4 +1645,28 @@ func TestExtractStreamingReasoningContent(t *testing.T) {
 		result := extractStreamingReasoningContent(body)
 		assert.Equal(t, "", result)
 	})
+}
+
+func TestMetricsMonitor_TokenizeReasoningVLLMFallback(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		assert.NoError(t, err)
+		requests = append(requests, string(body))
+
+		if len(requests) == 1 {
+			http.Error(w, "content is unsupported", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"count":3,"tokens":null}`))
+	}))
+	defer server.Close()
+
+	count := tokenizeReasoning(server.URL, "one two three")
+
+	assert.Equal(t, 3, count)
+	assert.Len(t, requests, 2)
+	assert.JSONEq(t, `{"content":"one two three"}`, requests[0])
+	assert.JSONEq(t, `{"prompt":"one two three","add_special_tokens":false}`, requests[1])
 }

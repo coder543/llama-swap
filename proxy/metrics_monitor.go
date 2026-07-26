@@ -362,16 +362,17 @@ func (mp *metricsMonitor) wrapHandler(
 		if parsed, err := processStreamingResponse(modelID, request.URL.Path, recorder.StartTime(), body); err != nil {
 			mp.logger.Warnf("error processing streaming response: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 		} else {
+			applyObservedStreamingSpeeds(&parsed, recorder.StartTime(), recorder.FirstWriteTime(), recorder.LastWriteTime())
 			tm.Tokens = parsed.Tokens
 			tm.DurationMs = parsed.DurationMs
 		}
 	} else {
 		if gjson.ValidBytes(body) {
 			parsed := gjson.ParseBytes(body)
-			usage, timings := findMetricsPayload(parsed, request.URL.Path)
+			usage, timings, performance := findMetricsPayload(parsed, request.URL.Path)
 
-			if usage.Exists() || timings.Exists() {
-				if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings); err != nil {
+			if usage.Exists() || timings.Exists() || performance.Exists() {
+				if parsedMetrics, err := parseMetrics(modelID, recorder.StartTime(), usage, timings, performance); err != nil {
 					mp.logger.Warnf("error parsing metrics: %v, path=%s, recording minimal metrics", err, request.URL.Path)
 				} else {
 					tm.Tokens = parsedMetrics.Tokens
@@ -474,10 +475,10 @@ func processStreamingResponse(modelID, reqPath string, start time.Time, body []b
 
 		if gjson.ValidBytes(data) {
 			parsed := gjson.ParseBytes(data)
-			usage, timings := findMetricsPayload(parsed, reqPath)
+			usage, timings, performance := findMetricsPayload(parsed, reqPath)
 
-			if usage.Exists() || timings.Exists() {
-				return parseMetrics(modelID, start, usage, timings)
+			if usage.Exists() || timings.Exists() || performance.Exists() {
+				return parseMetrics(modelID, start, usage, timings, performance)
 			}
 		}
 	}
@@ -485,7 +486,7 @@ func processStreamingResponse(modelID, reqPath string, start time.Time, body []b
 	return ActivityLogEntry{}, fmt.Errorf("no valid JSON data found in stream")
 }
 
-func findMetricsPayload(parsed gjson.Result, reqPath string) (gjson.Result, gjson.Result) {
+func findMetricsPayload(parsed gjson.Result, reqPath string) (gjson.Result, gjson.Result, gjson.Result) {
 	candidates := []gjson.Result{parsed}
 	if data := parsed.Get("data"); data.Exists() {
 		candidates = append(candidates, data)
@@ -497,9 +498,18 @@ func findMetricsPayload(parsed gjson.Result, reqPath string) (gjson.Result, gjso
 		candidates = append(candidates, response)
 	}
 
+	var usage, timings, performance gjson.Result
 	for _, candidate := range candidates {
-		usage := candidate.Get("usage")
-		timings := candidate.Get("timings")
+		if !usage.Exists() {
+			usage = candidate.Get("usage")
+		}
+		if !timings.Exists() {
+			timings = candidate.Get("timings")
+		}
+		if !performance.Exists() {
+			// vLLM exposes opt-in per-request timing data under "metrics".
+			performance = candidate.Get("metrics")
+		}
 
 		// extract timings for infill - response is an array, timings are in the last element
 		// see #463
@@ -508,22 +518,19 @@ func findMetricsPayload(parsed gjson.Result, reqPath string) (gjson.Result, gjso
 				timings = arr[len(arr)-1].Get("timings")
 			}
 		}
-
-		if usage.Exists() || timings.Exists() {
-			return usage, timings
-		}
 	}
 
-	return gjson.Result{}, gjson.Result{}
+	return usage, timings, performance
 }
 
-func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) (ActivityLogEntry, error) {
+func parseMetrics(modelID string, start time.Time, usage, timings, performance gjson.Result) (ActivityLogEntry, error) {
 	wallDurationMs := int(time.Since(start).Milliseconds())
 
 	// default values
 	cachedTokens := -1 // unknown or missing data
 	outputTokens := 0
 	inputTokens := 0
+	reasoningTokens := 0
 
 	// timings data
 	tokensPerSecond := -1.0
@@ -548,6 +555,19 @@ func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) 
 
 		if ct := usage.Get("cache_read_input_tokens"); ct.Exists() {
 			cachedTokens = int(ct.Int())
+		} else if ct := usage.Get("prompt_tokens_details.cached_tokens"); ct.Exists() {
+			// OpenAI chat/completions, including vLLM with
+			// --enable-prompt-tokens-details.
+			cachedTokens = int(ct.Int())
+		} else if ct := usage.Get("input_tokens_details.cached_tokens"); ct.Exists() {
+			// OpenAI Responses API.
+			cachedTokens = int(ct.Int())
+		}
+
+		if rt := usage.Get("completion_tokens_details.reasoning_tokens"); rt.Exists() {
+			reasoningTokens = int(rt.Int())
+		} else if rt := usage.Get("output_tokens_details.reasoning_tokens"); rt.Exists() {
+			reasoningTokens = int(rt.Int())
 		}
 	}
 
@@ -567,6 +587,42 @@ func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) 
 		}
 	}
 
+	// vLLM can expose per-request performance data with
+	// --enable-per-request-metrics. Prefer the decode-only interval for
+	// generation speed so this remains comparable to llama.cpp timings.
+	if performance.Exists() {
+		if generationMs := performance.Get("generation_time_ms"); generationMs.Exists() &&
+			generationMs.Float() > 0 && outputTokens > 1 {
+			tokensPerSecond = float64(outputTokens-1) * 1000 / generationMs.Float()
+		} else if tps := performance.Get("tokens_per_second"); tps.Exists() && tps.Float() > 0 {
+			tokensPerSecond = tps.Float()
+		}
+
+		if ttftMs := performance.Get("time_to_first_token_ms"); ttftMs.Exists() && ttftMs.Float() > 0 {
+			processedTokens := inputTokens
+			if cachedTokens >= 0 && cachedTokens <= processedTokens {
+				processedTokens -= cachedTokens
+			}
+			if processedTokens > 0 {
+				// vLLM does not expose a prefill-only duration. TTFT excludes
+				// queue time and is the closest per-request measurement.
+				promptPerSecond = float64(processedTokens) * 1000 / ttftMs.Float()
+			}
+		}
+
+		reportedDurationMs := performance.Get("queue_time_ms").Float() +
+			performance.Get("time_to_first_token_ms").Float() +
+			performance.Get("generation_time_ms").Float()
+		if int(reportedDurationMs) > durationMs {
+			durationMs = int(reportedDurationMs)
+		}
+	}
+
+	if reasoningTokens > outputTokens {
+		reasoningTokens = outputTokens
+	}
+	visibleOutputTokens := outputTokens - reasoningTokens
+
 	return ActivityLogEntry{
 		Timestamp: time.Now(),
 		Model:     modelID,
@@ -574,13 +630,31 @@ func parseMetrics(modelID string, start time.Time, usage, timings gjson.Result) 
 			CachedTokens:    cachedTokens,
 			InputTokens:     inputTokens,
 			GeneratedTokens: outputTokens,
-			ReasoningTokens: 0,
-			OutputTokens:    outputTokens,
+			ReasoningTokens: reasoningTokens,
+			OutputTokens:    visibleOutputTokens,
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
 		},
 		DurationMs: durationMs,
 	}, nil
+}
+
+func applyObservedStreamingSpeeds(metric *ActivityLogEntry, start, firstWrite, lastWrite time.Time) {
+	if metric.Tokens.PromptPerSecond < 0 && firstWrite.After(start) {
+		processedTokens := metric.Tokens.InputTokens
+		if cachedTokens := metric.Tokens.CachedTokens; cachedTokens >= 0 && cachedTokens <= processedTokens {
+			processedTokens -= cachedTokens
+		}
+		if processedTokens > 0 {
+			metric.Tokens.PromptPerSecond = float64(processedTokens) / firstWrite.Sub(start).Seconds()
+		}
+	}
+
+	if metric.Tokens.TokensPerSecond < 0 &&
+		metric.Tokens.GeneratedTokens > 1 &&
+		lastWrite.After(firstWrite) {
+		metric.Tokens.TokensPerSecond = float64(metric.Tokens.GeneratedTokens-1) / lastWrite.Sub(firstWrite).Seconds()
+	}
 }
 
 // extractReasoningContent extracts reasoning content from a JSON response body.
@@ -595,6 +669,9 @@ func extractReasoningContent(body []byte) string {
 	if rc := parsed.Get("choices.0.message.reasoning_content"); rc.Exists() {
 		return rc.String()
 	}
+	if rc := parsed.Get("choices.0.message.reasoning"); rc.Exists() {
+		return rc.String()
+	}
 
 	// Anthropic format: content[].text where type is thinking
 	if contentArr := parsed.Get("content"); contentArr.Exists() {
@@ -604,6 +681,24 @@ func extractReasoningContent(body []byte) string {
 					return text.String()
 				}
 			}
+		}
+	}
+
+	// OpenAI Responses format: output items with reasoning_text content.
+	if outputArr := parsed.Get("output"); outputArr.Exists() {
+		var reasoningParts []string
+		for _, item := range outputArr.Array() {
+			if item.Get("type").String() != "reasoning" {
+				continue
+			}
+			for _, content := range item.Get("content").Array() {
+				if text := content.Get("text"); text.Exists() {
+					reasoningParts = append(reasoningParts, text.String())
+				}
+			}
+		}
+		if len(reasoningParts) > 0 {
+			return strings.Join(reasoningParts, "")
 		}
 	}
 
@@ -656,6 +751,9 @@ func extractStreamingReasoningContent(body []byte) string {
 		if rc := parsed.Get("choices.0.delta.reasoning_content"); rc.Exists() && rc.String() != "" {
 			reasoningParts = append(reasoningParts, rc.String())
 		}
+		if rc := parsed.Get("choices.0.delta.reasoning"); rc.Exists() && rc.String() != "" {
+			reasoningParts = append(reasoningParts, rc.String())
+		}
 
 		// Anthropic streaming: delta.reasoning_content or delta.thinking
 		if rc := parsed.Get("delta.reasoning_content"); rc.Exists() && rc.String() != "" {
@@ -663,6 +761,15 @@ func extractStreamingReasoningContent(body []byte) string {
 		}
 		if rc := parsed.Get("delta.thinking"); rc.Exists() && rc.String() != "" {
 			reasoningParts = append(reasoningParts, rc.String())
+		}
+
+		// OpenAI Responses streaming, both direct events and wrapped events.
+		for _, candidate := range []gjson.Result{parsed, parsed.Get("data")} {
+			if candidate.Get("type").String() == "response.reasoning_text.delta" {
+				if delta := candidate.Get("delta"); delta.Exists() && delta.Type == gjson.String {
+					reasoningParts = append(reasoningParts, delta.String())
+				}
+			}
 		}
 	}
 
@@ -684,32 +791,27 @@ func tokenizeReasoning(upstreamURL, reasoningContent string) int {
 	if err != nil {
 		return -1
 	}
-	reqBody := fmt.Sprintf(`{"content": %s}`, contentJSON)
-	resp, err := http.Post(upstreamURL+"/tokenize", "application/json", bytes.NewBufferString(reqBody))
-	if err != nil {
-		return -1
+	requestBodies := []string{
+		fmt.Sprintf(`{"content": %s}`, contentJSON),                             // llama.cpp
+		fmt.Sprintf(`{"prompt": %s, "add_special_tokens": false}`, contentJSON), // vLLM
 	}
-	defer resp.Body.Close()
+	for _, reqBody := range requestBodies {
+		resp, err := http.Post(upstreamURL+"/tokenize", "application/json", bytes.NewBufferString(reqBody))
+		if err != nil {
+			continue
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil || resp.StatusCode != http.StatusOK || !gjson.ValidBytes(body) {
+			continue
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return -1
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return -1
-	}
-
-	tokens := gjson.GetBytes(body, "tokens")
-	if tokens.Exists() {
-		return len(tokens.Array())
-	}
-
-	// Fallback: count array length from raw JSON
-	if gjson.ValidBytes(body) {
 		parsed := gjson.ParseBytes(body)
-		if t := parsed.Get("tokens"); t.Exists() {
-			return len(t.Array())
+		if tokens := parsed.Get("tokens"); tokens.Exists() && tokens.IsArray() {
+			return len(tokens.Array())
+		}
+		if count := parsed.Get("count"); count.Exists() {
+			return int(count.Int())
 		}
 	}
 
@@ -722,6 +824,16 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, modelID string, ups
 	if mp.captureCache == nil {
 		return
 	}
+
+	// Prefer an exact count supplied by the upstream usage object.
+	mp.mu.RLock()
+	for i := range mp.metrics {
+		if mp.metrics[i].ID == entryID && mp.metrics[i].Tokens.ReasoningTokens > 0 {
+			mp.mu.RUnlock()
+			return
+		}
+	}
+	mp.mu.RUnlock()
 
 	capture := mp.getCaptureByID(entryID)
 	if capture == nil || len(capture.RespBody) == 0 {
@@ -751,6 +863,9 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, modelID string, ups
 	for i := range mp.metrics {
 		if mp.metrics[i].ID == entryID {
 			generated := mp.metrics[i].Tokens.GeneratedTokens
+			if reasoningTokens > generated {
+				reasoningTokens = generated
+			}
 			mp.metrics[i].Tokens.ReasoningTokens = reasoningTokens
 			mp.metrics[i].Tokens.OutputTokens = generated - reasoningTokens
 			found = true
@@ -797,9 +912,11 @@ func decompressBody(body []byte, encoding string) ([]byte, error) {
 // while also capturing it in a buffer for later processing
 type responseBodyCopier struct {
 	gin.ResponseWriter
-	body  *bytes.Buffer
-	tee   io.Writer
-	start time.Time
+	body       *bytes.Buffer
+	tee        io.Writer
+	start      time.Time
+	firstWrite time.Time
+	lastWrite  time.Time
 }
 
 func newBodyCopier(w gin.ResponseWriter) *responseBodyCopier {
@@ -808,13 +925,16 @@ func newBodyCopier(w gin.ResponseWriter) *responseBodyCopier {
 		ResponseWriter: w,
 		body:           bodyBuffer,
 		tee:            io.MultiWriter(w, bodyBuffer),
+		start:          time.Now(),
 	}
 }
 
 func (w *responseBodyCopier) Write(b []byte) (int, error) {
-	if w.start.IsZero() {
-		w.start = time.Now()
+	now := time.Now()
+	if w.firstWrite.IsZero() {
+		w.firstWrite = now
 	}
+	w.lastWrite = now
 
 	// Single write operation that writes to both the response and buffer
 	return w.tee.Write(b)
@@ -830,6 +950,14 @@ func (w *responseBodyCopier) Header() http.Header {
 
 func (w *responseBodyCopier) StartTime() time.Time {
 	return w.start
+}
+
+func (w *responseBodyCopier) FirstWriteTime() time.Time {
+	return w.firstWrite
+}
+
+func (w *responseBodyCopier) LastWriteTime() time.Time {
+	return w.lastWrite
 }
 
 // sensitiveHeaders lists headers that should be redacted in captures
