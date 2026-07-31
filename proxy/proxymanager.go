@@ -755,9 +755,12 @@ func (pm *ProxyManager) proxyToUpstream(c *gin.Context) {
 		c.Request.ContentLength = int64(len(bodyBytes))
 	}
 
-	// attempt to record metrics if it is a POST request
-	if pm.metricsMonitor != nil && c.Request.Method == "POST" {
-		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, upstreamCaptureFields(remainingPath), pm.GetUpstreamURL(modelID), handler); err != nil {
+	// Record activity only for model inference endpoints. The upstream route
+	// also proxies control requests such as /v1/streams/lookup, which do not
+	// contain token metrics and should not appear in the activity log.
+	captureFields := upstreamCaptureFields(remainingPath)
+	if pm.metricsMonitor != nil && c.Request.Method == "POST" && captureFields != captureNone {
+		if err := pm.metricsMonitor.wrapHandler(modelID, c.Writer, c.Request, captureFields, pm.GetUpstreamURL(modelID), handler); err != nil {
 			pm.sendErrorResponse(c, http.StatusInternalServerError, fmt.Sprintf("error proxying metrics wrapped request: %s", err.Error()))
 			pm.proxyLogger.Errorf("Error proxying wrapped upstream request for model %s, path=%s", modelID, originalPath)
 			return

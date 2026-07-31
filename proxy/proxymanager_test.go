@@ -1939,3 +1939,29 @@ models:
 	assert.NotEmpty(t, capture.RespBody)
 	assert.Equal(t, "[REDACTED]", capture.ReqHeaders["Authorization"])
 }
+
+func TestProxyManager_UpstreamControlRequestNotRecorded(t *testing.T) {
+	cfg := testConfigFromYAML(t, `
+healthCheckTimeout: 15
+logLevel: error
+captureBuffer: 5
+models:
+  model1:
+    cmd: {{RESPONDER}} --port ${PORT} --silent --respond model1
+`)
+
+	proxy := New(cfg)
+	defer proxy.StopProcesses(StopWaitForInflightRequest)
+	injectTestHandlers(proxy, nil)
+
+	req := httptest.NewRequest("POST", "/upstream/model1/v1/streams/lookup", bytes.NewBufferString(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := CreateTestResponseRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	// The test responder does not implement this control endpoint. The proxy
+	// must pass that response through without creating an activity entry.
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+	assert.Empty(t, proxy.metricsMonitor.getMetrics())
+}
