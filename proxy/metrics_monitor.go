@@ -84,15 +84,16 @@ type TokenMetrics struct {
 
 // ActivityLogEntry represents parsed token statistics from llama-server logs
 type ActivityLogEntry struct {
-	ID              int          `json:"id"`
-	Timestamp       time.Time    `json:"timestamp"`
-	Model           string       `json:"model"`
-	ReqPath         string       `json:"req_path"`
-	RespContentType string       `json:"resp_content_type"`
-	RespStatusCode  int          `json:"resp_status_code"`
-	Tokens          TokenMetrics `json:"tokens"`
-	DurationMs      int          `json:"duration_ms"`
-	HasCapture      bool         `json:"has_capture"`
+	ID                      int          `json:"id"`
+	Timestamp               time.Time    `json:"timestamp"`
+	Model                   string       `json:"model"`
+	ReqPath                 string       `json:"req_path"`
+	RespContentType         string       `json:"resp_content_type"`
+	RespStatusCode          int          `json:"resp_status_code"`
+	Tokens                  TokenMetrics `json:"tokens"`
+	DurationMs              int          `json:"duration_ms"`
+	HasCapture              bool         `json:"has_capture"`
+	reasoningTokensReported bool
 }
 
 type ReqRespCapture struct {
@@ -365,6 +366,7 @@ func (mp *metricsMonitor) wrapHandler(
 			applyObservedStreamingSpeeds(&parsed, recorder.StartTime(), recorder.FirstWriteTime(), recorder.LastWriteTime())
 			tm.Tokens = parsed.Tokens
 			tm.DurationMs = parsed.DurationMs
+			tm.reasoningTokensReported = parsed.reasoningTokensReported
 		}
 	} else {
 		if gjson.ValidBytes(body) {
@@ -377,6 +379,7 @@ func (mp *metricsMonitor) wrapHandler(
 				} else {
 					tm.Tokens = parsedMetrics.Tokens
 					tm.DurationMs = parsedMetrics.DurationMs
+					tm.reasoningTokensReported = parsedMetrics.reasoningTokensReported
 				}
 			}
 		} else {
@@ -428,7 +431,7 @@ func (mp *metricsMonitor) wrapHandler(
 	mp.emitMetric(tm)
 
 	// Async: tokenize reasoning content and update reasoning/output split
-	if upstreamURL != "" {
+	if upstreamURL != "" && !tm.reasoningTokensReported {
 		go mp.updateReasoningTokens(metricID, modelID, upstreamURL)
 	}
 
@@ -531,6 +534,7 @@ func parseMetrics(modelID string, start time.Time, usage, timings, performance g
 	outputTokens := 0
 	inputTokens := 0
 	reasoningTokens := 0
+	reasoningTokensReported := false
 
 	// timings data
 	tokensPerSecond := -1.0
@@ -566,8 +570,10 @@ func parseMetrics(modelID string, start time.Time, usage, timings, performance g
 
 		if rt := usage.Get("completion_tokens_details.reasoning_tokens"); rt.Exists() {
 			reasoningTokens = int(rt.Int())
+			reasoningTokensReported = true
 		} else if rt := usage.Get("output_tokens_details.reasoning_tokens"); rt.Exists() {
 			reasoningTokens = int(rt.Int())
+			reasoningTokensReported = true
 		}
 	}
 
@@ -635,7 +641,8 @@ func parseMetrics(modelID string, start time.Time, usage, timings, performance g
 			PromptPerSecond: promptPerSecond,
 			TokensPerSecond: tokensPerSecond,
 		},
-		DurationMs: durationMs,
+		DurationMs:              durationMs,
+		reasoningTokensReported: reasoningTokensReported,
 	}, nil
 }
 
@@ -825,10 +832,11 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, modelID string, ups
 		return
 	}
 
-	// Prefer an exact count supplied by the upstream usage object.
+	// Prefer an exact count supplied by the upstream usage object, including
+	// an authoritative zero for responses that contain no reasoning.
 	mp.mu.RLock()
 	for i := range mp.metrics {
-		if mp.metrics[i].ID == entryID && mp.metrics[i].Tokens.ReasoningTokens > 0 {
+		if mp.metrics[i].ID == entryID && mp.metrics[i].reasoningTokensReported {
 			mp.mu.RUnlock()
 			return
 		}
@@ -868,6 +876,7 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, modelID string, ups
 			}
 			mp.metrics[i].Tokens.ReasoningTokens = reasoningTokens
 			mp.metrics[i].Tokens.OutputTokens = generated - reasoningTokens
+			mp.metrics[i].reasoningTokensReported = true
 			found = true
 			break
 		}

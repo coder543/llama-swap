@@ -735,6 +735,53 @@ func TestMetricsMonitor_ParseMetrics(t *testing.T) {
 		assert.Equal(t, 50, metrics.Tokens.OutputTokens)
 	})
 
+	t.Run("parses DS4 usage and llama-compatible timings", func(t *testing.T) {
+		usage := gjson.Parse(`{
+			"prompt_tokens": 120,
+			"completion_tokens": 21,
+			"prompt_tokens_details": {"cached_tokens": 40},
+			"completion_tokens_details": {"reasoning_tokens": 8}
+		}`)
+		timings := gjson.Parse(`{
+			"ttft_ms": 100,
+			"prefill_tokens": 80,
+			"prefill_cached_tokens": 40,
+			"prefill_tok_s": 800,
+			"decode_tok_s": 20,
+			"cache_n": 40,
+			"prompt_n": 80,
+			"prompt_ms": 100,
+			"prompt_per_second": 800,
+			"predicted_n": 21,
+			"predicted_ms": 1050,
+			"predicted_per_second": 20
+		}`)
+
+		metrics, err := parseMetrics("deepseek-v4-flash", time.Now(), usage, timings, gjson.Result{})
+		assert.NoError(t, err)
+		assert.Equal(t, 80, metrics.Tokens.InputTokens)
+		assert.Equal(t, 40, metrics.Tokens.CachedTokens)
+		assert.Equal(t, 21, metrics.Tokens.GeneratedTokens)
+		assert.Equal(t, 8, metrics.Tokens.ReasoningTokens)
+		assert.Equal(t, 13, metrics.Tokens.OutputTokens)
+		assert.Equal(t, 800.0, metrics.Tokens.PromptPerSecond)
+		assert.Equal(t, 20.0, metrics.Tokens.TokensPerSecond)
+		assert.True(t, metrics.reasoningTokensReported)
+	})
+
+	t.Run("treats a reported zero reasoning count as authoritative", func(t *testing.T) {
+		usage := gjson.Parse(`{
+			"prompt_tokens": 10,
+			"completion_tokens": 2,
+			"completion_tokens_details": {"reasoning_tokens": 0}
+		}`)
+
+		metrics, err := parseMetrics("test-model", time.Now(), usage, gjson.Result{}, gjson.Result{})
+		assert.NoError(t, err)
+		assert.Zero(t, metrics.Tokens.ReasoningTokens)
+		assert.True(t, metrics.reasoningTokensReported)
+	})
+
 	t.Run("estimates missing streaming speeds from observed writes", func(t *testing.T) {
 		start := time.Unix(100, 0)
 		metric := ActivityLogEntry{
@@ -1669,4 +1716,28 @@ func TestMetricsMonitor_TokenizeReasoningVLLMFallback(t *testing.T) {
 	assert.Len(t, requests, 2)
 	assert.JSONEq(t, `{"content":"one two three"}`, requests[0])
 	assert.JSONEq(t, `{"prompt":"one two three","add_special_tokens":false}`, requests[1])
+}
+
+func TestMetricsMonitor_UpdateReasoningTokens_SkipsReportedZero(t *testing.T) {
+	called := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called <- struct{}{}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"tokens":[]}`))
+	}))
+	defer server.Close()
+
+	mm := newMetricsMonitor(testLogger, 10, 1)
+	entryID := mm.queueMetrics(ActivityLogEntry{
+		Model:                   "test-model",
+		reasoningTokensReported: true,
+	})
+
+	mm.updateReasoningTokens(entryID, "test-model", server.URL)
+
+	select {
+	case <-called:
+		t.Fatal("reported reasoning count should not call /tokenize")
+	default:
+	}
 }
