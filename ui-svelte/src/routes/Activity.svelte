@@ -6,6 +6,7 @@
   import { persistentStore } from "../stores/persistent";
   import { onMount } from "svelte";
   import type { ReqRespCapture } from "../lib/types";
+  import { displayCaptureId } from "../lib/capture";
 
   type ColumnKey =
     | "id"
@@ -254,7 +255,7 @@
           {#each sortedMetrics as metric (metric.id)}
             <tr class="whitespace-nowrap text-sm border-gray-200 dark:border-white/10">
               {#if $visibleColumns.includes("id")}
-                <td class="px-4 py-4">{metric.id + 1}</td>
+                <td class="px-4 py-4">{displayCaptureId(metric.id)}</td>
               {/if}
               {#if $visibleColumns.includes("time")}
                 <td class="px-6 py-4">{formatRelativeTime(metric.timestamp)}</td>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ReqRespCapture } from "../lib/types";
+  import { captureTitle } from "../lib/capture";
 
   interface Props {
     capture: ReqRespCapture | null;
@@ -309,7 +310,7 @@
       <div
         class="flex justify-between items-center p-4 border-b border-card-border"
       >
-        <h2 class="text-xl font-bold pb-0">Capture #{capture.id + 1}{#if capture.req_path} <span class="text-base font-mono font-normal text-txtsecondary">{capture.req_path}</span>{/if}</h2>
+        <h2 class="text-xl font-bold pb-0">{captureTitle(capture.id)}{#if capture.req_path} <span class="text-base font-mono font-normal text-txtsecondary">{capture.req_path}</span>{/if}</h2>
         <button
           onclick={() => dialogEl?.close()}
           class="text-txtsecondary hover:text-txtmain text-2xl leading-none"
