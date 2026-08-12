@@ -26,15 +26,16 @@ llama-swap is a light weight, transparent proxy server that provides automatic m
 - Use `make test-all` before completing work. This includes long running concurrency tests.
 - Use `make test-ui` after making changes to the UI in ui-svelte/
 
-## Local Deployment
+## Aurelia and Cognicore Deployment
 
-- After committing any changes in this repository, always complete this rebuild, install, restart, and verification workflow so the running service uses the latest commit.
-- Build the ARM64 binary, including the embedded UI, with `make linux-arm64`.
-- Install it with `install -m 0755 build/llama-swap-linux-arm64 /home/coder/bin/llama-swap`.
-- The installed instance is a system-level systemd service named `llama-swap.service`; it runs as the `coder` user.
-- Restart it with `sudo systemctl restart llama-swap.service`.
-- Verify the restart with `systemctl is-active llama-swap.service`, `curl -fsS http://127.0.0.1:8083/health`, and `curl -fsS http://127.0.0.1:8083/api/version`.
-- Restarting llama-swap stops its managed model processes; the next model request may need to wait for a cold start.
+- Aurelia's `/home/coder/workspace/llama-swap/llama-swap-src` is the only maintained source checkout. Do not edit or build from a source checkout on Cognicore.
+- After committing any changes in this repository, always build both Linux artifacts from Aurelia with `make linux-arm64 linux-amd64`. The embedded UI is built once and included in both binaries.
+- Install the ARM64 artifact locally with `install -m 0755 build/llama-swap-linux-arm64 /home/coder/bin/llama-swap`.
+- Aurelia uses the system-level `llama-swap.service`, running as `coder`. Restart it with `sudo systemctl restart llama-swap.service`.
+- Verify Aurelia with `systemctl is-active llama-swap.service`, `curl -fsS http://127.0.0.1:8083/health`, and `curl -fsS http://127.0.0.1:8083/api/version`.
+- Copy the AMD64 artifact to Cognicore as `/tmp/llama-swap-linux-amd64`, install it as `/home/coder/local-workspace/llama-swap/llama-swap`, remove the temporary copy, and restart Cognicore's user-level service with `systemctl --user restart llama-swap.service`.
+- Verify Cognicore with `systemctl --user is-active llama-swap.service`, `curl -fsS http://127.0.0.1:8083/health`, and `curl -fsS http://127.0.0.1:8083/api/version`.
+- Restarting either llama-swap service stops its managed model processes; the next model request may need to wait for a cold start.
 
 ### Commit message example format:
 
