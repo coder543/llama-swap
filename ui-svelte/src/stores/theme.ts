@@ -49,7 +49,7 @@ function getInitialThemeMode(): ThemeMode {
       console.error("Error parsing stored theme", e);
     }
   }
-  return "system";
+  return "dark";
 }
 
 // Persistent stores
