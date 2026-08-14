@@ -123,6 +123,8 @@
       { id: "cached", label: "Cached", defaultVisible: true },
       { id: "prompt", label: "Prompt", defaultVisible: true },
       { id: "generated", label: "Generated", defaultVisible: true },
+      { id: "reasoning", label: "Reasoning", defaultVisible: false },
+      { id: "output", label: "Output", defaultVisible: false },
       { id: "drafted", label: "Drafted", defaultVisible: false },
       { id: "prompt_speed", label: "Prefill", defaultVisible: true },
       { id: "gen_speed", label: "Decode", defaultVisible: true },
@@ -153,7 +155,7 @@
 
   // svelte-ignore state_referenced_locally
   let columnVisibility = $state<VisibilityState>(
-    Object.keys($storedVisibility).length > 0 ? $storedVisibility : defaultVisibility
+    { ...defaultVisibility, ...$storedVisibility }
   );
 
   // svelte-ignore state_referenced_locally
@@ -409,8 +411,23 @@
       },
       {
         id: "generated",
-        accessorFn: (row) => row.tokens.output_tokens,
+        accessorFn: (row) => row.tokens.generated_tokens,
         header: "Generated",
+        cell: ({ row }) => row.original.tokens.generated_tokens.toLocaleString(),
+      },
+      {
+        id: "reasoning",
+        accessorFn: (row) => row.tokens.reasoning_tokens,
+        header: () => renderComponent(HeaderLabel, { label: "Reasoning", tooltip: "reasoning / thinking tokens" }),
+        cell: ({ row }) =>
+          row.original.tokens.reasoning_tokens > 0
+            ? row.original.tokens.reasoning_tokens.toLocaleString()
+            : "-",
+      },
+      {
+        id: "output",
+        accessorFn: (row) => row.tokens.output_tokens,
+        header: () => renderComponent(HeaderLabel, { label: "Output", tooltip: "non-reasoning output tokens" }),
         cell: ({ row }) => row.original.tokens.output_tokens.toLocaleString(),
       },
       {

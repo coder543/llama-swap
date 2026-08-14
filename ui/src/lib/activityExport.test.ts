@@ -27,6 +27,8 @@ function entry(overrides: Partial<ActivityLogEntry> = {}): ActivityLogEntry {
       draft_tokens: 0,
       draft_acc_tokens: 0,
       input_tokens: 0,
+      generated_tokens: 0,
+      reasoning_tokens: 0,
       output_tokens: 0,
       prompt_per_second: -1,
       tokens_per_second: -1,
@@ -53,11 +55,36 @@ describe("activity source export", () => {
 });
 
 describe("summarizeActivity", () => {
+  it("keeps generated, reasoning, and visible output distinct in exports", () => {
+    const row = entry();
+    row.tokens.generated_tokens = 100;
+    row.tokens.reasoning_tokens = 80;
+    row.tokens.output_tokens = 20;
+    row.tokens.tokens_per_second = 50;
+    const other = entry();
+    other.tokens.generated_tokens = 100;
+    other.tokens.reasoning_tokens = 0;
+    other.tokens.output_tokens = 100;
+    other.tokens.tokens_per_second = 25;
+    const summary = summarizeActivity([row, other]);
+    expect(summary.generatedTokens).toBe(200);
+    expect(summary.reasoningTokens).toBe(80);
+    expect(summary.outputTokens).toBe(120);
+    expect(summary.tokensPerSecond).toBeCloseTo(200 / 6);
+    expect(activityCellText(row, "generated")).toBe("100");
+    expect(activityCellText(row, "reasoning")).toBe("80");
+    expect(activityCellText(row, "output")).toBe("20");
+    const text = summaryMarkdown(summary);
+    expect(text).toContain("| Reasoning | 80 |");
+    expect(text).toContain("| Output | 120 |");
+  });
   it("returns zeroed totals and unknown speeds for no rows", () => {
     expect(summarizeActivity([])).toEqual({
       durationMs: 0,
       cacheTokens: 0,
       inputTokens: 0,
+      generatedTokens: 0,
+      reasoningTokens: 0,
       outputTokens: 0,
       draftTokens: 0,
       draftAccTokens: 0,
@@ -90,6 +117,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 10,
           draft_acc_tokens: 6,
           input_tokens: 200,
+          generated_tokens: 50,
+          reasoning_tokens: 0,
           output_tokens: 50,
           prompt_per_second: 100,
           tokens_per_second: 25,
@@ -102,6 +131,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 30,
           draft_acc_tokens: 12,
           input_tokens: 300,
+          generated_tokens: 150,
+          reasoning_tokens: 0,
           output_tokens: 150,
           prompt_per_second: 300,
           tokens_per_second: 75,
@@ -126,6 +157,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 0,
           draft_acc_tokens: 0,
           input_tokens: 200,
+          generated_tokens: 0,
+          reasoning_tokens: 0,
           output_tokens: 0,
           prompt_per_second: 100,
           tokens_per_second: -1,
@@ -137,6 +170,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 0,
           draft_acc_tokens: 0,
           input_tokens: 300,
+          generated_tokens: 0,
+          reasoning_tokens: 0,
           output_tokens: 0,
           prompt_per_second: 300,
           tokens_per_second: -1,
@@ -158,6 +193,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 0,
           draft_acc_tokens: 0,
           input_tokens: 100,
+          generated_tokens: 40,
+          reasoning_tokens: 0,
           output_tokens: 40,
           prompt_per_second: -1,
           tokens_per_second: 20,
@@ -169,6 +206,8 @@ describe("summarizeActivity", () => {
           draft_tokens: 0,
           draft_acc_tokens: 0,
           input_tokens: 0,
+          generated_tokens: 0,
+          reasoning_tokens: 0,
           output_tokens: 0,
           prompt_per_second: 999,
           tokens_per_second: 999,
@@ -195,6 +234,8 @@ describe("activityCellText", () => {
       draft_tokens: 10,
       draft_acc_tokens: 5,
       input_tokens: 2048,
+      generated_tokens: 512,
+      reasoning_tokens: 0,
       output_tokens: 512,
       prompt_per_second: 123.456,
       tokens_per_second: -1,
@@ -278,6 +319,8 @@ describe("summaryMarkdown", () => {
           draft_tokens: 240,
           draft_acc_tokens: 148,
           input_tokens: 5678,
+          generated_tokens: 1904,
+          reasoning_tokens: 0,
           output_tokens: 1904,
           prompt_per_second: 412.3,
           tokens_per_second: 48.15,
@@ -294,6 +337,8 @@ describe("summaryMarkdown", () => {
         `| Cached | ${(12480).toLocaleString()} |`,
         `| Prompt | ${(5678).toLocaleString()} (412.30 t/s) |`,
         `| Generated | ${(1904).toLocaleString()} (48.15 t/s) |`,
+        "| Reasoning | 0 |",
+        `| Output | ${(1904).toLocaleString()} |`,
         "| Drafted | 61.7% 148/240 |",
       ].join("\n")
     );
@@ -309,6 +354,8 @@ describe("summaryMarkdown", () => {
         "| Cached | 0 |",
         "| Prompt | 0 (unknown) |",
         "| Generated | 0 (unknown) |",
+        "| Reasoning | 0 |",
+        "| Output | 0 |",
         "| Drafted | - |",
       ].join("\n")
     );
