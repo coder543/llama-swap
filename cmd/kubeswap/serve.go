@@ -676,6 +676,7 @@ func newServer(cfg *serveConfig, client kubernetes.Interface, upstreamOverride s
 	s.upstream.Store("")
 
 	proxy := &httputil.ReverseProxy{
+		//lint:ignore SA1019 Retain Director's existing forwarding-header behavior for the pod proxy.
 		Director: func(r *http.Request) {
 			u, err := url.Parse(s.upstream.Load().(string))
 			if err != nil {
