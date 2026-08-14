@@ -25,12 +25,6 @@ import (
 // newFakeClient Returns a fresh fake client-go clientset.
 func newFakeClient() *fake.Clientset { return fake.NewClientset() }
 
-// makeDep Creates the config's backend resources against the fake client via ensureResources.
-func makeDep(cfg *serveConfig, client *fake.Clientset) (*serveConfig, error) {
-	_, err := ensureResources(client, cfg)
-	return cfg, err
-}
-
 // TestKubeswap_EnsureResourcesCreates Verifies a missing backend gets its Deployment and Service created.
 func TestKubeswap_EnsureResourcesCreates(t *testing.T) {
 	client := newFakeClient()

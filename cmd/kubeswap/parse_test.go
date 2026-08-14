@@ -100,7 +100,7 @@ func TestKubeswap_ParseTolerations(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
-	got, err = parseTolerations([]string{"a=b"})
+	_, err = parseTolerations([]string{"a=b"})
 	if err == nil {
 		t.Error("expected error for malformed toleration")
 	}

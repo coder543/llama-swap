@@ -6,6 +6,8 @@ import "regexp"
 // Metal GPU-family support, newest naming first. macOS renamed this key over
 // time (`spdisplays_metal` → `spdisplays_metal_support`/`spdisplays_metalfamily`
 // → `spdisplays_mtlgpufamilysupport`), so we probe all known spellings.
+//
+//lint:ignore U1000 Used by the macOS detector; parser helpers in this file are tested on all platforms.
 var metalFamilyKeys = []string{
 	"spdisplays_mtlgpufamilysupport",
 	"spdisplays_metalfamily",

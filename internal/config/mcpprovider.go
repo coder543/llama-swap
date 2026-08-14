@@ -69,9 +69,6 @@ var errConfigResultTooLarge = errors.New("config query result is too large")
 // maxConfigQueryNodes, so it was refused rather than rendered.
 var errConfigValueTooLarge = errors.New("config query result has too many values")
 
-// errConfigQueryOutOfMemory signals that the heap guard cancelled the query.
-var errConfigQueryOutOfMemory = errors.New("config query used too much memory")
-
 // ConfigProvider serves the running llama-swap configuration so an agent can
 // give advice about the setup in front of it rather than in the abstract.
 //

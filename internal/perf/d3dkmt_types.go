@@ -1,3 +1,5 @@
+//lint:file-ignore U1000 D3DKMT layouts are consumed by the Windows collector and shared layout tests.
+
 package perf
 
 type LUID struct {
