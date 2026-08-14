@@ -320,6 +320,17 @@ models:
     #   is different from the model's ID
     useModelName: "openai/gpt-oss-120B"
 
+    # memory: capacity units consumed by this model in matrix capacity mode
+    # - required for every model when matrix.capacity is configured
+    # - units are arbitrary, but must match the units used by matrix.capacity
+    memory: 80
+
+    # evictCost: relative cost of unloading this model in capacity cost mode
+    # - optional, default: memory
+    # - higher values make the solver prefer keeping this model loaded
+    # - zero is allowed
+    evictCost: 120
+
     # filters: a dictionary of filter settings
     # - optional, default: empty dictionary
     # - same capabilities as peer filters (stripParams, setParams)
@@ -509,10 +520,8 @@ hooks:
 #           models that run together, and loading one group typically unloads
 #           the others.
 #
-# - matrix: the newer engine. More involved to configure, but far more
-#           flexible. It uses a small expression language to describe which
-#           model combinations are allowed to run concurrently, enabling
-#           setups that groups cannot express.
+# - matrix: run concurrent models using either a capacity budget or an
+#           advanced expression language for explicit model combinations.
 #
 # The routing section is optional.
 routing:
@@ -586,74 +595,35 @@ routing:
             - "forever-modelB"
             - "forever-modelc"
 
-      # The matrix lists the model combinations that are allowed to run
-      # concurrently. When a model is requested, the solver makes room for it
-      # by evicting as few running models as possible, preferring to keep the
-      # costliest ones loaded.
+      # Capacity mode is the preferred matrix configuration. Choose arbitrary
+      # units (for example GB of VRAM or a conservative weighted memory value),
+      # set memory on every model, and define the total available capacity here.
+      # A model larger than capacity is treated as capacity-sized, so it runs
+      # alone instead of being rejected.
       #
       # Solver behaviour:
       #   1. A request arrives for model X.
       #   2. If X is already running, forward the request. Done.
-      #   3. Collect every set that contains X.
-      #   4. For each set, add up the evict_costs of the running models that
-      #      are NOT in that set — that is the set's cost.
-      #   5. Choose the lowest-cost set. Break ties by definition order.
-      #   6. Evict the models outside that set, start X, forward the request.
+      #   3. If X fits alongside the running models, start it. Done.
+      #   4. Otherwise evict models until X fits, then start it.
       #
-      # Subset semantics: a set [a, b, c] also permits any subset of itself.
-      # Only the requested model is started; the others are not preloaded.
-      #
-      # A model that appears in no set can only run on its own.
+      # cost minimizes total evictCost; omitted evictCost defaults to memory.
+      # lru evicts least-recently-used models until enough capacity is free.
       #
       matrix:
-        # vars: optional aliases for model IDs
-        # - names may contain alphanumeric, "-", or "." characters (1-32 chars)
-        # - map each short name to a real model ID (not a model alias)
-        # - keeps the set expressions short and readable
-        # - sets and evict_costs may mix vars with real model IDs
-        # - a var takes precedence when its name is also a real model ID
-        vars:
-          g: gemma-model
-          q: qwen-model
-          m: mistral-model
-          v: voxtral-model
-          e: reranker-model
+        capacity: 128
+        strategy: cost # cost (default) or lru
 
-        # evict_costs: relative cost of losing a running model (default: 1)
-        evict_costs:
-          v: 50 # vllm backend, slow cold start
-          llama-70B: 30 # 70B weights, slow to load
-
-        # sets: named combinations of models that may run together.
-        # Each value is an expression built from these operators:
-        #   &     AND   (models run together)
-        #   |     OR    (alternatives)
-        #   ()    grouping
-        #   +ref  inline the expression of another set
-        #
-        # Each expression expands into one or more concrete sets:
-        #   "model-a"            → [model-a]
-        #   "a & b"              → [a, b]
-        #   "a | b"              → [a], [b]
-        #   "(a | b) & c"        → [a, c], [b, c]
-        #   "(a | b) & (c | d)"  → [a,c], [a,d], [b,c], [b,d]
-        #   "+llms & v"          → inline the llms set, then AND with v
-        sets:
-          # An LLM plus TTS. Vars and real model IDs may be mixed.
-          # expands to: [g,v], [qwen-model,v], [m,v]
-          standard: "(g | qwen-model | m) & v"
-
-          # An LLM plus TTS plus reranker.
-          # expands to: [g,v,e], [q,v,e]
-          with_rerank: "(g | q) & v & e"
-
-          # An LLM plus image generation, no TTS.
-          # expands to: [g,stable-diffusion], [q,stable-diffusion]
-          creative: "(g | q) & stable-diffusion"
-
-          # The 70B model uses every GPU, so it can only run alone.
-          # Vars are not required when using real model IDs.
-          full: "llama-70B"
+        # Advanced set-expression mode remains available instead of capacity.
+        # It declares named combinations with &, |, grouping, and +references:
+        # vars:
+        #   g: gemma-model
+        #   v: voxtral-model
+        # evict_costs:
+        #   v: 50
+        # sets:
+        #   standard: "g & v"
+        #   full: "llama-70B"
 
   # scheduler: how queued requests are ordered.
   # The default and only valid scheduler is "fifo"

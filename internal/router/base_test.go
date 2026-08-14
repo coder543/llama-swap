@@ -28,13 +28,13 @@ type stubPlanner struct {
 	evict map[string][]string
 }
 
-func (s *stubPlanner) EvictionFor(target string, _ []string) []string {
+func (s *stubPlanner) EvictionFor(target string, _ scheduler.PlanningState) scheduler.EvictionDecision {
 	if s.evict == nil {
-		return nil
+		return scheduler.EvictionDecision{}
 	}
-	return s.evict[target]
+	return scheduler.EvictionDecision{Evict: s.evict[target]}
 }
-func (s *stubPlanner) OnSwapStart(string, []string) {}
+func (s *stubPlanner) OnSwapStart(string, scheduler.PlanningState) {}
 
 func newTestBase(t *testing.T, processes map[string]process.Process, planner scheduler.Swapper) *baseRouter {
 	t.Helper()

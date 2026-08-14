@@ -124,6 +124,25 @@ func validateSpilloverCoexistence(config Config, selectorID string, targets []st
 
 	if config.Routing.Router.Use == "matrix" {
 		matrix := config.Routing.Router.Settings.Matrix
+		if matrix != nil && matrix.CapacityMode() {
+			remaining := matrix.Capacity
+			seen := make(map[string]struct{}, len(targets))
+			for _, target := range targets {
+				if _, duplicate := seen[target]; duplicate {
+					continue
+				}
+				seen[target] = struct{}{}
+				memory := config.Models[target].Memory
+				if memory > matrix.Capacity {
+					memory = matrix.Capacity
+				}
+				if memory > remaining {
+					return fmt.Errorf("selectors.%s.targets exceed matrix capacity when loaded together", selectorID)
+				}
+				remaining -= memory
+			}
+			return nil
+		}
 		if matrix != nil && matrix.program != nil && matrix.program.CanContainAll(targets) {
 			return nil
 		}

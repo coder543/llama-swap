@@ -306,6 +306,65 @@ selectors:
 		assert.Contains(t, err.Error(), "must all appear together in one expanded matrix set")
 	})
 
+	t.Run("capacity matrix fits", func(t *testing.T) {
+		_, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  a:
+    cmd: echo ${PORT}
+    memory: 25
+  b:
+    cmd: echo ${PORT}
+    memory: 15
+matrix:
+  capacity: 40
+selectors:
+  public:
+    strategy: spillover
+    targets: [a, b]
+`))
+		require.NoError(t, err)
+	})
+
+	t.Run("capacity matrix exceeded", func(t *testing.T) {
+		_, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  a:
+    cmd: echo ${PORT}
+    memory: 30
+  b:
+    cmd: echo ${PORT}
+    memory: 20
+matrix:
+  capacity: 40
+selectors:
+  public:
+    strategy: spillover
+    targets: [a, b]
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceed matrix capacity")
+	})
+
+	t.Run("capacity matrix clamps oversized target", func(t *testing.T) {
+		_, err := LoadConfigFromReader(strings.NewReader(`
+models:
+  huge:
+    cmd: echo ${PORT}
+    memory: 50
+  b:
+    cmd: echo ${PORT}
+    memory: 1
+matrix:
+  capacity: 40
+selectors:
+  public:
+    strategy: spillover
+    targets: [huge, b]
+`))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "exceed matrix capacity")
+	})
+
 	t.Run("matrix symbolic large", func(t *testing.T) {
 		const (
 			dimensions = 4

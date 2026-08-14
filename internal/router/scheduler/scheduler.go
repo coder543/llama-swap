@@ -29,18 +29,40 @@ var ErrModelNotFound = swaputil.ErrNoLocalModelFound
 // stopped before a target can serve. It is orthogonal to the scheduling
 // strategy — any Scheduler works with any Swapper.
 type Swapper interface {
-	// EvictionFor returns running model IDs that must be stopped before
-	// target can serve. running is the complete set the scheduler considers
-	// live: every process that is not stopped, unioned with the targets of
-	// in-flight swaps the scheduler has already committed to (which are not yet
-	// visible in process state). The planner does not inspect process state
-	// itself. Pure decision; must not log.
-	EvictionFor(target string, running []string) []string
+	// EvictionFor returns the models that must stop before target can serve.
+	// State is assembled by the scheduler and includes pending swap targets,
+	// models that cannot currently be evicted, and serialized request recency.
+	// The planner does not inspect process state itself. Pure decision; must not
+	// log.
+	EvictionFor(target string, state PlanningState) EvictionDecision
 
-	// OnSwapStart runs once at the start of every swap, with the same running
-	// set EvictionFor was given for this decision. Planners may log their
+	// OnSwapStart runs once at the start of every swap, with the same planning
+	// state EvictionFor was given for this decision. Planners may log their
 	// decision here at whatever verbosity they choose.
-	OnSwapStart(target string, running []string)
+	OnSwapStart(target string, state PlanningState)
+}
+
+// PlanningState is the scheduler-owned snapshot used for an eviction decision.
+// All access happens on the router run-loop goroutine, so planners may read the
+// maps without locking but must not retain or mutate them.
+type PlanningState struct {
+	// Running contains every non-stopped process plus targets of swaps already
+	// committed but not necessarily visible in process state.
+	Running []string
+	// Protected contains models that cannot currently be evicted because they
+	// are serving requests or are the target of an active swap.
+	Protected map[string]struct{}
+	// LastGranted is a monotonic sequence recorded when GrantServe succeeds.
+	// A missing model has never been granted and is therefore oldest for LRU.
+	LastGranted map[string]uint64
+}
+
+// EvictionDecision is the result of one speculative planning pass. Blocked is
+// distinct from an empty Evict list: it means the target cannot fit until one
+// or more protected models becomes evictable, so the request must stay queued.
+type EvictionDecision struct {
+	Evict   []string
+	Blocked bool
 }
 
 // Scheduler decides what happens to each event the router's run loop receives.

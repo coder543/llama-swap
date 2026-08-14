@@ -116,6 +116,12 @@ type ModelConfig struct {
 	// Capabilities defines what modalities and features the model supports.
 	Capabilities ModelCapConfig `yaml:"capabilities"`
 
+	// Capacity-based matrix settings. Memory is measured in the same arbitrary
+	// units as matrix.capacity. EvictCost defaults to Memory when omitted; the
+	// pointer preserves an explicitly configured zero cost.
+	Memory    int  `yaml:"memory"`
+	EvictCost *int `yaml:"evictCost"`
+
 	// Copy of HealthCheckTimeout from global config
 	HealthCheckTimeout int `yaml:"healthCheckTimeout"`
 }

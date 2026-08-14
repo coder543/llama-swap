@@ -76,7 +76,7 @@ llama-swap supports many more features to customize how you want to manage your 
 | --------- | ---------------------------------------------- |
 | `ttl`     | automatic unloading of models after a timeout  |
 | `macros`  | reusable snippets to use in configurations     |
-| `matrix`  | run multiple models at a time                  |
+| `matrix`  | run multiple models with capacity or set rules |
 | `hooks`   | event driven functionality                     |
 | `env`     | define environment variables per model         |
 | `aliases` | serve a model with different names             |

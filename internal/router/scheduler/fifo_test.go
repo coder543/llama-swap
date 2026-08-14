@@ -22,17 +22,19 @@ import (
 
 // stubPlanner returns a fixed eviction list per target.
 type stubPlanner struct {
-	evict map[string][]string
+	evict   map[string][]string
+	blocked map[string]bool
 }
 
-func (s *stubPlanner) EvictionFor(target string, _ []string) []string {
-	if s.evict == nil {
-		return nil
+func (s *stubPlanner) EvictionFor(target string, _ PlanningState) EvictionDecision {
+	decision := EvictionDecision{Blocked: s.blocked[target]}
+	if s.evict != nil {
+		decision.Evict = s.evict[target]
 	}
-	return s.evict[target]
+	return decision
 }
 
-func (s *stubPlanner) OnSwapStart(string, []string) {}
+func (s *stubPlanner) OnSwapStart(string, PlanningState) {}
 
 // grantRec is one GrantError / GrantServe call. err!=nil marks an error grant;
 // otherwise it is a serve grant and serve reports whether the caller received it.
@@ -542,6 +544,83 @@ func TestFIFO_GrantServeFalseDoesNotLeakInFlight(t *testing.T) {
 	s.OnRequest(req("b"))
 	if eff.startsFor("b") != 1 {
 		t.Fatalf("StartSwap(b)=%d want 1 (no leaked in-flight on a)", eff.startsFor("b"))
+	}
+}
+
+func TestFIFO_GrantServeRecordsRecency(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateReady
+	eff.states["b"] = process.StateStopped
+	s := newFIFO(&stubPlanner{}, eff)
+
+	s.OnRequest(req("a"))
+	if got := s.lastGranted["a"]; got != 1 {
+		t.Fatalf("lastGranted[a]=%d want 1 after successful fast-path grant", got)
+	}
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"})
+
+	eff.serveResult["a"] = false
+	s.OnRequest(req("a"))
+	if got := s.lastGranted["a"]; got != 1 {
+		t.Fatalf("lastGranted[a]=%d want unchanged after failed grant", got)
+	}
+
+	s.OnRequest(req("b"))
+	if _, ok := s.lastGranted["b"]; ok {
+		t.Fatal("cold model marked recently used before its handler was granted")
+	}
+	eff.states["b"] = process.StateReady
+	s.OnSwapDone(SwapDone{ModelID: "b"})
+	if got := s.lastGranted["b"]; got != 2 {
+		t.Fatalf("lastGranted[b]=%d want 2 after post-swap grant", got)
+	}
+}
+
+func TestFIFO_PlanningStateProtectsServingAndLoadingModels(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["serving"] = process.StateReady
+	s := newFIFO(&stubPlanner{}, eff)
+	s.inFlight["serving"] = 1
+	s.active["loading"] = &activeSwap{modelID: "loading"}
+	s.lastGranted["serving"] = 7
+
+	state := s.planningState("")
+	if len(state.Running) != 2 || state.Running[0] != "loading" || state.Running[1] != "serving" {
+		t.Fatalf("Running=%v want [loading serving]", state.Running)
+	}
+	for _, model := range []string{"loading", "serving"} {
+		if _, ok := state.Protected[model]; !ok {
+			t.Errorf("Protected missing %q: %v", model, state.Protected)
+		}
+	}
+	if got := state.LastGranted["serving"]; got != 7 {
+		t.Errorf("LastGranted[serving]=%d want 7", got)
+	}
+}
+
+func TestFIFO_BlockedDecisionQueuesUntilProtectedRequestFinishes(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["a"] = process.StateReady
+	eff.states["b"] = process.StateStopped
+	planner := &stubPlanner{
+		evict:   map[string][]string{"b": {"a"}},
+		blocked: map[string]bool{"b": true},
+	}
+	s := newFIFO(planner, eff)
+
+	s.OnRequest(req("a"))
+	s.OnRequest(req("b"))
+	if got := len(s.queued); got != 1 {
+		t.Fatalf("queue len=%d want 1", got)
+	}
+	if got := eff.startsFor("b"); got != 0 {
+		t.Fatalf("StartSwap(b)=%d while decision blocked", got)
+	}
+
+	planner.blocked["b"] = false
+	s.OnServeDone(ServeDoneEvent{ModelID: "a"})
+	if got := eff.startsFor("b"); got != 1 {
+		t.Fatalf("StartSwap(b)=%d want 1 after protected request finished", got)
 	}
 }
 

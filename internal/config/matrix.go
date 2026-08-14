@@ -12,6 +12,8 @@ var varKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9.-]{1,32}$`)
 
 // MatrixConfig represents the swap matrix configuration block.
 type MatrixConfig struct {
+	Capacity   int               `yaml:"capacity"`
+	Strategy   string            `yaml:"strategy"`
 	Var        map[string]string `yaml:"vars"`
 	EvictCosts map[string]int    `yaml:"evict_costs"`
 	Sets       OrderedSets       `yaml:"sets"`
@@ -57,6 +59,15 @@ func (os *OrderedSets) UnmarshalYAML(value *yaml.Node) error {
 
 // ValidateMatrix validates and compiles a matrix configuration.
 func ValidateMatrix(matrix *MatrixConfig, models map[string]ModelConfig) error {
+	if matrix.Capacity < 0 {
+		return fmt.Errorf("capacity must be a positive integer")
+	}
+	if matrix.Capacity > 0 {
+		return validateCapacityMatrix(matrix, models)
+	}
+	if matrix.Strategy != "" {
+		return fmt.Errorf("strategy requires capacity mode")
+	}
 	if len(matrix.Sets) == 0 {
 		return fmt.Errorf("matrix must define at least one set")
 	}
@@ -101,6 +112,38 @@ func ValidateMatrix(matrix *MatrixConfig, models map[string]ModelConfig) error {
 	}
 	matrix.program = program
 	return nil
+}
+
+func validateCapacityMatrix(matrix *MatrixConfig, models map[string]ModelConfig) error {
+	switch matrix.Strategy {
+	case "", "cost", "lru":
+	default:
+		return fmt.Errorf("strategy must be one of: cost, lru")
+	}
+
+	if len(matrix.Sets) > 0 || len(matrix.Var) > 0 || len(matrix.EvictCosts) > 0 {
+		return fmt.Errorf("capacity mode cannot use vars, sets, or evict_costs; define memory and evictCost on model stanzas")
+	}
+
+	for modelID, model := range models {
+		if model.Memory <= 0 {
+			return fmt.Errorf("model %s memory must be a positive integer when matrix.capacity is set", modelID)
+		}
+		if model.EvictCost != nil && *model.EvictCost < 0 {
+			return fmt.Errorf("model %s evictCost must be >= 0", modelID)
+		}
+	}
+
+	// A capacity matrix has no DSL program. Clear a previously compiled program
+	// in case callers reuse a MatrixConfig value before validating it again.
+	matrix.program = nil
+	return nil
+}
+
+// CapacityMode reports whether this matrix uses the capacity solver instead of
+// the set-expression program.
+func (m *MatrixConfig) CapacityMode() bool {
+	return m != nil && m.Capacity > 0
 }
 
 func resolveMatrixModel(ident string, vars map[string]string, models map[string]ModelConfig) (string, bool) {

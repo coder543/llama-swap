@@ -272,6 +272,77 @@ func TestValidateMatrix_NoSets(t *testing.T) {
 	assert.Contains(t, err.Error(), "at least one set")
 }
 
+func TestValidateMatrix_CapacityMode(t *testing.T) {
+	models := map[string]ModelConfig{
+		"gemma": {Cmd: "echo gemma", Memory: 18},
+		"qwen":  {Cmd: "echo qwen", Memory: 41, EvictCost: new(0)},
+	}
+	matrix := MatrixConfig{Capacity: 40, Strategy: "lru"}
+
+	err := ValidateMatrix(&matrix, models)
+	require.NoError(t, err)
+	assert.True(t, matrix.CapacityMode())
+	assert.Nil(t, matrix.Program())
+}
+
+func TestValidateMatrix_CapacityModeValidation(t *testing.T) {
+	validModels := map[string]ModelConfig{"gemma": {Memory: 10}}
+	tests := []struct {
+		name    string
+		matrix  MatrixConfig
+		models  map[string]ModelConfig
+		message string
+	}{
+		{
+			name:    "negative capacity",
+			matrix:  MatrixConfig{Capacity: -1},
+			models:  validModels,
+			message: "capacity must be a positive integer",
+		},
+		{
+			name:    "strategy requires capacity",
+			matrix:  MatrixConfig{Strategy: "lru", Sets: OrderedSets{{Name: "s", DSL: "gemma"}}},
+			models:  validModels,
+			message: "strategy requires capacity",
+		},
+		{
+			name:    "unknown strategy",
+			matrix:  MatrixConfig{Capacity: 40, Strategy: "random"},
+			models:  validModels,
+			message: "strategy must be one of",
+		},
+		{
+			name:    "missing model memory",
+			matrix:  MatrixConfig{Capacity: 40},
+			models:  makeModels("gemma"),
+			message: "memory must be a positive integer",
+		},
+		{
+			name:    "negative eviction cost",
+			matrix:  MatrixConfig{Capacity: 40},
+			models:  map[string]ModelConfig{"gemma": {Memory: 10, EvictCost: new(-1)}},
+			message: "evictCost must be >= 0",
+		},
+		{
+			name: "cannot mix DSL fields",
+			matrix: MatrixConfig{
+				Capacity: 40,
+				Sets:     OrderedSets{{Name: "s", DSL: "gemma"}},
+			},
+			models:  validModels,
+			message: "capacity mode cannot use",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateMatrix(&tt.matrix, tt.models)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.message)
+		})
+	}
+}
+
 func TestValidateMatrix_UnknownMapIDInDSL(t *testing.T) {
 	models := makeModels("gemma")
 
@@ -350,4 +421,32 @@ matrix:
 	assert.Same(t, cfg.Matrix.Program(), cfg.Routing.Router.Settings.Matrix.Program())
 	// Groups should be empty when matrix is used
 	assert.Empty(t, cfg.Groups)
+}
+
+func TestValidateMatrix_ConfigCapacityMode(t *testing.T) {
+	yaml := `
+models:
+  gemma:
+    cmd: echo gemma ${PORT}
+    memory: 18
+  qwen:
+    cmd: echo qwen ${PORT}
+    memory: 22
+    evictCost: 0
+routing:
+  router:
+    use: matrix
+    settings:
+      matrix:
+        capacity: 40
+        strategy: lru
+`
+	cfg, err := LoadConfigFromReader(strings.NewReader(yaml))
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Routing.Router.Settings.Matrix)
+	assert.Equal(t, 40, cfg.Routing.Router.Settings.Matrix.Capacity)
+	assert.Equal(t, "lru", cfg.Routing.Router.Settings.Matrix.Strategy)
+	assert.Equal(t, 18, cfg.Models["gemma"].Memory)
+	require.NotNil(t, cfg.Models["qwen"].EvictCost)
+	assert.Zero(t, *cfg.Models["qwen"].EvictCost)
 }

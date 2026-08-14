@@ -182,18 +182,19 @@ the run-loop goroutine, so no internal locking is needed.
 
 ```go
 type Swapper interface {
-    EvictionFor(target string, running []string) []string
-    OnSwapStart(target string, running []string)
+    EvictionFor(target string, state PlanningState) EvictionDecision
+    OnSwapStart(target string, state PlanningState)
 }
 ```
 
 The eviction policy. `EvictionFor` is a **pure decision** — given the target and
-the complete `running` set, return the running model IDs that must stop. It must
-not log or mutate anything, and it does **not** inspect process state itself:
-the scheduler hands it `running` already assembled (every non-stopped process,
-unioned with the targets of in-flight swaps already committed but not yet
-visible in process state). That keeps the swapper a pure function of its inputs,
-with no reference to processes.
+a scheduler-owned snapshot, return the running model IDs that must stop. The
+snapshot contains the complete running set, models protected by requests or
+active swaps, and grant-time recency for LRU policies. `Blocked` distinguishes a
+target that fits without eviction from one that cannot fit until a protected
+model becomes evictable. The swapper must not log or mutate anything, and it
+does **not** inspect process state itself. That keeps it a pure function of its
+inputs, with no reference to processes.
 
 The reason it must not log is that it is a _speculative_ query — "what would we
 evict if we started this swap right now?" — called far more often than swaps
@@ -344,18 +345,21 @@ A `Swapper` is a pure decision function plus a logging hook — the easiest of t
    }
    ```
 
-2. **Implement `EvictionFor(target, running)`** as a _pure_ decision:
-   - `running` is the complete live set, already assembled for you: every
+2. **Implement `EvictionFor(target, state)`** as a _pure_ decision:
+   - `state.Running` is the complete live set, already assembled for you: every
      non-stopped process unioned with the targets of in-flight swaps the
      scheduler has committed to. You don't filter process state or fold in
      in-flight targets yourself, that's the scheduler's job. Just decide against the slice you're handed.
-   - Return the list of model IDs in `running` that must stop for `target` to
-     run. Return `nil`/empty when nothing needs evicting.
+   - `state.Protected` identifies models a policy must not select when it can
+     make room another way. Return `Blocked: true` when no currently legal
+     eviction set can make enough room.
+   - Return the model IDs that must stop for `target` to run. Return an empty
+     `Evict` when nothing needs evicting.
    - Do **not** mutate state here.
    - Do **not** log here. It can be called multiple times per request. Since it is pure function have tests verify the expected behaviour.
 
-3. **Implement `OnSwapStart(target, running)`** — called once when a swap
-   actually begins, with the same `running` set `EvictionFor` saw. This is the
+3. **Implement `OnSwapStart(target, state)`** — called once when a swap
+   actually begins, with the same planning state `EvictionFor` saw. This is the
    right place to log: one call equals one real swap. `matrixSwapper` re-solves
    and logs the chosen set and cost here; `groupSwapper` logs nothing.
 
@@ -379,7 +383,15 @@ The rules you must honour:
 
 - **Respect the `GrantServe` boolean.** Only count a request as in-flight when `GrantServe` returns true (see the in-flight contract above). A false return means the caller is gone; no `ServeDoneEvent` will ever arrive, so incrementing on false permanently strands the counter.
 
-- **Account for in-flight swaps in your running set.** When you call `Swapper.EvictionFor`, the running set you pass must include not just live processes (`Effects.RunningModels`) but also the targets of swaps you've already started that aren't yet visible in process state — otherwise the swapper contradicts decisions already in motion.
+- **Record recency at a successful grant.** Increment the monotonic grant
+  sequence only when `GrantServe` returns true. Recording on request completion
+  makes a long-running request appear stale; recording before a successful
+  grant lets cancelled waiters distort LRU decisions.
+
+- **Account for in-flight swaps in planning state.** `PlanningState.Running`
+  must include not just live processes (`Effects.RunningModels`) but also the
+  targets of swaps already started but not yet visible in process state. Those
+  active targets also belong in `PlanningState.Protected`.
 
 What each method must do:
 

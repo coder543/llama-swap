@@ -6,6 +6,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
 )
 
 type Group struct {
@@ -67,7 +68,7 @@ type groupSwapper struct {
 	modelToGroup map[string]string
 }
 
-func (p *groupSwapper) EvictionFor(target string, running []string) []string {
+func (p *groupSwapper) EvictionFor(target string, state scheduler.PlanningState) scheduler.EvictionDecision {
 	tg := p.modelToGroup[target]
 	tgCfg := p.config.Routing.Router.Settings.Groups[tg]
 
@@ -97,10 +98,10 @@ func (p *groupSwapper) EvictionFor(target string, running []string) []string {
 		}
 	}
 
-	for _, mID := range running {
+	for _, mID := range state.Running {
 		consider(mID)
 	}
-	return result
+	return scheduler.EvictionDecision{Evict: result}
 }
 
-func (p *groupSwapper) OnSwapStart(target string, running []string) {}
+func (p *groupSwapper) OnSwapStart(target string, state scheduler.PlanningState) {}
