@@ -19,6 +19,7 @@ import type {
 import { appendActivityFilters, type ActivityFilters } from "../lib/activityFilters";
 import { apiUrl } from "../lib/apiPath";
 import { connectionState } from "./theme";
+import { sortModels } from "../lib/modelUtils";
 
 // Stores
 export const models = writable<Model[]>([]);
@@ -131,11 +132,8 @@ export function handleAPIEventMessage(data: string): void {
       const newModels = (JSON.parse(message.data) as Model[]).map((m) =>
         m.uptimeMs !== undefined ? { ...m, readyAt: receivedAt - m.uptimeMs } : m,
       );
-      // Sort models by name and id
-      newModels.sort((a, b) => {
-        return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
-      });
-      models.set(newModels);
+      models.set(sortModels(newModels));
+
       break;
     }
 
