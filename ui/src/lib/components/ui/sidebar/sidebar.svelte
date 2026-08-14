@@ -4,6 +4,7 @@
 	import type { HTMLAttributes } from "svelte/elements";
 	import { SIDEBAR_WIDTH_MOBILE } from "./constants.js";
 	import { useSidebar } from "./context.svelte.js";
+	import { containScroll } from "$lib/containScroll.js";
 
 	let {
 		ref = $bindable(null),
@@ -38,13 +39,16 @@
 		bind:open={() => sidebar.openMobile, (v) => sidebar.setOpenMobile(v)}
 		{...restProps}
 	>
+		<!-- Contain drawer gestures without the modal's page-wide pointer/selection locks. -->
 		<Sheet.Content
 			bind:ref
+			preventScroll={false}
+			preventOverflowTextSelection={false}
 			data-sidebar="sidebar"
 			data-slot="sidebar"
 			data-mobile="true"
 			class={cn(
-				"bg-background text-sidebar-foreground w-(--sidebar-width) p-0 [&>button]:hidden",
+				"bg-background text-sidebar-foreground max-h-dvh w-(--sidebar-width) overflow-hidden p-0 [&>button]:hidden",
 				className
 			)}
 			style="--sidebar-width: {SIDEBAR_WIDTH_MOBILE};"
@@ -54,7 +58,7 @@
 				<Sheet.Title>Sidebar</Sheet.Title>
 				<Sheet.Description>Displays the mobile sidebar.</Sheet.Description>
 			</Sheet.Header>
-			<div class="flex h-full w-full flex-col">
+			<div use:containScroll class="flex min-h-0 w-full flex-1 flex-col">
 				{@render children?.()}
 			</div>
 		</Sheet.Content>

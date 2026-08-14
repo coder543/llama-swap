@@ -21,7 +21,7 @@
   import * as Switch from "$lib/components/ui/switch/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
   import { PowerOff, Loader2, ExternalLink, SquareStack } from "@lucide/svelte";
-  import { modelServerPath } from "../lib/modelUtils";
+  import { activeLocalModels, modelServerPath, visibleWhenUnlistedHidden } from "../lib/modelUtils";
 
   let unloadingAll = $state(false);
 
@@ -30,9 +30,10 @@
   });
 
   let visibleModels = $derived(
-    $showUnlisted ? $models : $models.filter((m) => !m.unlisted)
+    $showUnlisted ? $models : $models.filter(visibleWhenUnlistedHidden)
   );
   let localModels = $derived(visibleModels.filter((model) => !model.peerID));
+  let activeModels = $derived(activeLocalModels($models));
   let peerModels = $derived(visibleModels.filter((model) => model.peerID));
   let selectedProfile = $derived(
     $profiles.find((profile) => profile.id === $activeProfile)
@@ -42,9 +43,6 @@
       a.localeCompare(b, undefined, { numeric: true })
     )
   );
-
-  let readyCount = $derived($models.filter((m) => m.state === "ready").length);
-  let anyReady = $derived(readyCount > 0);
 
   async function handleUnloadAll(): Promise<void> {
     unloadingAll = true;
@@ -119,6 +117,20 @@
   </div>
 {/snippet}
 
+{#snippet modelRows(sectionModels: Model[], emptyMessage?: string)}
+  {#if sectionModels.length === 0}
+    {#if emptyMessage}
+      <div class="text-muted-foreground px-4 py-6 text-center text-sm">{emptyMessage}</div>
+    {/if}
+  {:else}
+    <div class="divide-y">
+      {#each sectionModels as model (model.id)}
+        {@render modelRow(model)}
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#snippet modelSection(title: string, sectionModels: Model[], headerExtra?: Snippet)}
   <Card.Root class="shrink-0 gap-0 overflow-hidden py-0">
     <Card.Header class="shrink-0 border-b px-4 py-2.5">
@@ -133,17 +145,7 @@
       </div>
     </Card.Header>
     <Card.Content class="p-0">
-      {#if sectionModels.length === 0}
-        <div class="text-muted-foreground px-4 py-6 text-center text-sm">
-          No {title.toLowerCase()} available
-        </div>
-      {:else}
-        <div class="divide-y">
-          {#each sectionModels as model (model.id)}
-            {@render modelRow(model)}
-          {/each}
-        </div>
-      {/if}
+      {@render modelRows(sectionModels, `No ${title.toLowerCase()} available`)}
     </Card.Content>
   </Card.Root>
 {/snippet}
@@ -168,18 +170,12 @@
       <div class="flex items-center gap-2">
         <SquareStack class="size-5" />
         <Card.Title class="text-lg">Models</Card.Title>
-        <span class="text-muted-foreground text-sm">
-          ({visibleModels.length} of {$models.length})
-        </span>
-        <span class="text-muted-foreground text-xs uppercase tracking-wide">
-          {readyCount} ready
-        </span>
         <div class="ml-auto flex items-center gap-2">
           <Button
             variant="outline"
             size="sm"
             onclick={handleUnloadAll}
-            disabled={!anyReady || unloadingAll}
+            disabled={activeModels.length === 0 || unloadingAll}
           >
             {#if unloadingAll}
               <Loader2 class="size-3.5 animate-spin" />
@@ -191,6 +187,15 @@
         </div>
       </div>
     </Card.Header>
+    <Card.Content class="p-0">
+      {#if activeModels.length > 0}
+        <div class="flex items-center gap-2 border-b px-4 py-2.5">
+          <h3 class="pb-0 text-sm font-medium tracking-normal">Active models</h3>
+          <span class="text-muted-foreground text-xs">{activeModels.length}</span>
+        </div>
+        {@render modelRows(activeModels)}
+      {/if}
+    </Card.Content>
   </Card.Root>
 
   <div class="flex min-h-0 shrink-0 flex-col gap-4">

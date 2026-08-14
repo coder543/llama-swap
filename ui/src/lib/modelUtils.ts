@@ -158,3 +158,32 @@ export function filterModelOptions(options: ModelOption[], query: string): Model
     return terms.every((term) => haystack.includes(term));
   });
 }
+
+// A model is running when its process is loaded (ready), in the middle of
+// loading (starting), or in the middle of unloading (stopping). This mirrors
+// the backend's RunningModels(), which excludes stopped and shutdown.
+export function isRunningModel(m: Model): boolean {
+  return m.state === "ready" || m.state === "starting" || m.state === "stopping";
+}
+
+// Sort alphabetically by display name (falling back to ID), then ID.
+// Returns a new array, leaving the input untouched.
+export function sortModels(models: Model[]): Model[] {
+  return [...models].sort((a, b) => {
+    const byName = (a.name || a.id).localeCompare(b.name || b.id, undefined, { numeric: true });
+    return byName || a.id.localeCompare(b.id, undefined, { numeric: true });
+  });
+}
+
+// Include loading/unloading processes: they still occupy memory. Peer state
+// is not tracked locally. Active unlisted models must remain manageable.
+export function activeLocalModels(models: Model[]): Model[] {
+  return sortModels(models.filter((model) => !model.peerID && isRunningModel(model)));
+}
+
+// A model is shown even when unlisted models are hidden if it is not unlisted
+// at all, or it is currently running. Running unlisted models stay visible
+// regardless of the "show unlisted" toggle.
+export function visibleWhenUnlistedHidden(m: Model): boolean {
+  return !m.unlisted || isRunningModel(m);
+}

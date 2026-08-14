@@ -1,15 +1,13 @@
 <script lang="ts">
   import { link } from "svelte-spa-router";
-  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Sun, Moon, Monitor, ChevronRight, Settings, CircleQuestionMark } from "@lucide/svelte";
+  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Sun, Moon, Monitor, Settings, CircleQuestionMark } from "@lucide/svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
-  import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { toggleTheme, themeMode, appTitle } from "../stores/theme";
   import { currentRoute } from "../stores/route";
   import { playgroundActivity, docsAgentStreaming } from "../stores/playgroundActivity";
   import { performanceEnabled, models, tailcatStatus } from "../stores/api";
-  import { showUnlistedModels } from "../stores/modelDisplay";
-  import { modelsMenuOpen } from "../stores/sidebar";
+  import { activeLocalModels } from "../lib/modelUtils";
   import type { Model } from "../lib/types";
   import { isComposingKey } from "../lib/ime";
   import ConnectionStatus from "./ConnectionStatus.svelte";
@@ -38,12 +36,7 @@
     return path === "/" ? current === "/" : current.startsWith(path);
   }
 
-  let visibleLocalModels = $derived(
-    $models.filter((model) => !model.peerID && ($showUnlistedModels || !model.unlisted)),
-  );
-  let visiblePeerModels = $derived(
-    $models.filter((model) => model.peerID && ($showUnlistedModels || !model.unlisted)),
-  );
+  let activeModels = $derived(activeLocalModels($models));
 
   type DotColor = "grey" | "yellow" | "green";
   function statusDotColor(model: Model): DotColor {
@@ -91,11 +84,12 @@
     </div>
   </Sidebar.Header>
 
-  <Sidebar.Content>
-    <Sidebar.Group>
-      <Sidebar.GroupContent>
-        <Sidebar.Menu class="gap-1">
-          <Sidebar.MenuItem>
+  <!-- Only the model list owns scrolling; the surrounding navigation stays fixed. -->
+  <Sidebar.Content class="overflow-clip">
+    <Sidebar.Group class="min-h-0">
+      <Sidebar.GroupContent class="flex min-h-0 flex-col">
+        <Sidebar.Menu class="gap-1 min-h-0">
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={$currentRoute === "/" || isActive("/activity", $currentRoute)} tooltipContent="Activity">
               {#snippet child({ props })}
                 <a href="/" use:link {...props}>
@@ -107,7 +101,7 @@
           </Sidebar.MenuItem>
 
           {#if $tailcatStatus.enabled}
-            <Sidebar.MenuItem>
+            <Sidebar.MenuItem class="shrink-0">
               <Sidebar.MenuButton isActive={isActive("/tailcat", $currentRoute)} tooltipContent="Tailcat">
                 {#snippet child({ props })}
                   <a href="/tailcat" use:link {...props}>
@@ -119,7 +113,8 @@
             </Sidebar.MenuItem>
           {/if}
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
+
             <Sidebar.MenuButton isActive={isActive("/playground", $currentRoute)} tooltipContent="Playground">
               {#snippet child({ props })}
                 <a href="/playground" use:link {...props}>
@@ -130,62 +125,31 @@
             </Sidebar.MenuButton>
           </Sidebar.MenuItem>
 
-          <Sidebar.MenuItem>
-            <Collapsible.Root
-              open={$modelsMenuOpen}
-              onOpenChange={(v) => modelsMenuOpen.set(v)}
-              class="gap-0"
+          <Sidebar.MenuItem class="flex min-h-8 flex-col">
+            <Sidebar.MenuButton
+              isActive={$currentRoute.startsWith("/models")}
+              tooltipContent="Models"
+              class="shrink-0"
             >
-              <Sidebar.MenuButton
-                isActive={$currentRoute.startsWith("/models")}
-                tooltipContent="Models"
-              >
-                {#snippet child({ props })}
-                  <a href="/models" use:link {...props}>
-                    <Boxes />
-                    <span>Models</span>
-                    <span
-                      class="ml-auto transition-transform duration-200 {$modelsMenuOpen ? 'rotate-90' : ''}"
-                      role="button"
-                      tabindex="0"
-                      aria-label="Toggle models section"
-                      onclick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        modelsMenuOpen.update((v) => !v);
-                      }}
-                      onkeydown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          modelsMenuOpen.update((v) => !v);
-                        }
-                      }}
-                    >
-                      <ChevronRight />
-                    </span>
-                  </a>
-                {/snippet}
-              </Sidebar.MenuButton>
-              <Collapsible.Content>
+              {#snippet child({ props })}
+                <a href="/models" use:link {...props}>
+                  <Boxes />
+                  <span>Models</span>
+                </a>
+              {/snippet}
+            </Sidebar.MenuButton>
+            {#if activeModels.length > 0}
+              <div class="min-h-0 overflow-x-hidden overflow-y-auto overscroll-y-contain touch-pan-y touch-pinch-zoom [-webkit-overflow-scrolling:touch]">
                 <Sidebar.MenuSub>
-                  {#each visibleLocalModels as model (model.id)}
+                  {#each activeModels as model (model.id)}
                     {@render modelMenuItem(model)}
                   {/each}
-                  {#if visiblePeerModels.length > 0}
-                    <li class="text-sidebar-foreground/70 px-2 pt-2 pb-1 text-xs font-medium">
-                      Peers
-                    </li>
-                    {#each visiblePeerModels as model (model.id)}
-                      {@render modelMenuItem(model)}
-                    {/each}
-                  {/if}
                 </Sidebar.MenuSub>
-              </Collapsible.Content>
-            </Collapsible.Root>
+              </div>
+            {/if}
           </Sidebar.MenuItem>
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={isActive("/logs", $currentRoute)} tooltipContent="Logs">
               {#snippet child({ props })}
                 <a href="/logs" use:link {...props}>
@@ -197,7 +161,7 @@
           </Sidebar.MenuItem>
 
           {#if $performanceEnabled}
-            <Sidebar.MenuItem>
+            <Sidebar.MenuItem class="shrink-0">
               <Sidebar.MenuButton isActive={isActive("/performance", $currentRoute)} tooltipContent="Performance">
                 {#snippet child({ props })}
                   <a href="/performance" use:link {...props}>
@@ -209,7 +173,7 @@
             </Sidebar.MenuItem>
           {/if}
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={isActive("/hardware", $currentRoute)} tooltipContent="Hardware">
               {#snippet child({ props })}
                 <a href="/hardware" use:link {...props}>
@@ -226,7 +190,7 @@
 
   <Sidebar.Footer>
     <Sidebar.Menu>
-      <Sidebar.MenuItem>
+      <Sidebar.MenuItem class="shrink-0">
         <Sidebar.MenuButton isActive={isActive("/help", $currentRoute)} tooltipContent="Help">
           {#snippet child({ props })}
             <a href="/help" use:link {...props}>

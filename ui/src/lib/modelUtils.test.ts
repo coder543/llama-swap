@@ -4,6 +4,10 @@ import {
   filterModelOptions,
   groupModels,
   matchesCapabilities,
+  isRunningModel,
+  visibleWhenUnlistedHidden,
+  sortModels,
+  activeLocalModels,
   matchesModel,
   modelServerPath,
   MODEL_GROUP_LOCAL,
@@ -260,5 +264,104 @@ describe("filterModelOptions", () => {
 
   it("matches an alias by its own name", () => {
     expect(filterModelOptions(options, "fast").map((o) => o.value)).toEqual(["fast"]);
+  });
+});
+
+describe("isRunningModel", () => {
+  it("treats ready, starting, and stopping as running", () => {
+    expect(isRunningModel(makeModel({ state: "ready" }))).toBe(true);
+    expect(isRunningModel(makeModel({ state: "starting" }))).toBe(true);
+    expect(isRunningModel(makeModel({ state: "stopping" }))).toBe(true);
+  });
+
+  it("treats stopped, shutdown, and unknown as not running", () => {
+    expect(isRunningModel(makeModel({ state: "stopped" }))).toBe(false);
+    expect(isRunningModel(makeModel({ state: "shutdown" }))).toBe(false);
+    expect(isRunningModel(makeModel({ state: "unknown" }))).toBe(false);
+  });
+});
+
+describe("sortModels", () => {
+  it("keeps alphabetical order regardless of process state", () => {
+    const models = [
+      makeModel({ id: "aaa", name: "aaa", state: "stopped" }),
+      makeModel({ id: "ddd", name: "ddd", state: "starting" }),
+      makeModel({ id: "ccc", name: "ccc", state: "stopped" }),
+      makeModel({ id: "bbb", name: "bbb", state: "ready" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["aaa", "bbb", "ccc", "ddd"]);
+  });
+
+  it("uses numeric-aware ordering for digit-bearing ids", () => {
+    const models = [
+      makeModel({ id: "model-10", name: "model-10", state: "stopped" }),
+      makeModel({ id: "model-2", name: "model-2", state: "stopped" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["model-2", "model-10"]);
+  });
+
+  it("sorts alphabetically by name and id", () => {
+    const models = [
+      makeModel({ id: "zeta", name: "zeta", state: "stopped" }),
+      makeModel({ id: "alpha", name: "alpha", state: "ready" }),
+      makeModel({ id: "mid", name: "mid", state: "stopped" }),
+      makeModel({ id: "beta", name: "beta", state: "stopping" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["alpha", "beta", "mid", "zeta"]);
+  });
+
+  it("falls back to ID for unnamed models and breaks name ties by ID", () => {
+    const models = [
+      makeModel({ id: "alpha-10", name: "Alpha" }),
+      makeModel({ id: "beta", name: "" }),
+      makeModel({ id: "alpha-2", name: "Alpha" }),
+    ];
+    expect(sortModels(models).map((model) => model.id)).toEqual(["alpha-2", "alpha-10", "beta"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const models = [
+      makeModel({ id: "bbb", name: "bbb", state: "stopped" }),
+      makeModel({ id: "aaa", name: "aaa", state: "ready" }),
+    ];
+    sortModels(models);
+    expect(models.map((m) => m.id)).toEqual(["bbb", "aaa"]);
+  });
+});
+
+describe("activeLocalModels", () => {
+  it("lists only active local processes, alphabetically, including unlisted models", () => {
+    const models = [
+      makeModel({ id: "zeta", name: "Zeta", state: "ready", unlisted: true }),
+      makeModel({ id: "beta", name: "Beta", state: "starting" }),
+      makeModel({ id: "alpha", name: "Alpha", state: "stopping" }),
+      makeModel({ id: "stopped", state: "stopped" }),
+      makeModel({ id: "shutdown", state: "shutdown" }),
+      makeModel({ id: "unknown", state: "unknown" }),
+      makeModel({ id: "peer/model", peerID: "peer", state: "ready" }),
+    ];
+    expect(activeLocalModels(models).map((model) => model.id)).toEqual(["alpha", "beta", "zeta"]);
+    expect(models[0].id).toBe("zeta");
+  });
+});
+
+describe("visibleWhenUnlistedHidden", () => {
+  it("keeps non-unlisted models visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: false, state: "stopped" }))).toBe(true);
+  });
+
+  it("keeps a running unlisted model visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "ready" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "starting" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopping" }))).toBe(true);
+  });
+
+  it("hides an unlisted model that is not running", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopped" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "shutdown" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "unknown" }))).toBe(false);
   });
 });
