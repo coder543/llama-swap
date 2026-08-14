@@ -8,6 +8,7 @@ import (
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
 )
 
 var benchmarkSolveResult solveResult
@@ -61,8 +62,9 @@ func BenchmarkMatrixSwapPath(b *testing.B) {
 	for b.Loop() {
 		running := runSets[i%len(runSets)]
 		i++
-		benchmarkEvict = swapper.EvictionFor("target-3", running)
-		swapper.OnSwapStart("target-3", running)
+		state := scheduler.PlanningState{Running: running}
+		benchmarkEvict = swapper.EvictionFor("target-3", state).Evict
+		swapper.OnSwapStart("target-3", state)
 	}
 }
 

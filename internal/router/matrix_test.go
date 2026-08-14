@@ -48,6 +48,44 @@ func newTestMatrix(t *testing.T, conf config.Config, sets config.OrderedSets, ev
 	return r
 }
 
+func newTestCapacityMatrix(t *testing.T, capacity int, strategy string, models map[string]config.ModelConfig, processes map[string]process.Process) *Matrix {
+	t.Helper()
+	conf := config.Config{HealthCheckTimeout: 5, Models: models}
+	matrix := &config.MatrixConfig{Capacity: capacity, Strategy: strategy}
+	if err := config.ValidateMatrix(matrix, models); err != nil {
+		t.Fatalf("ValidateMatrix: %v", err)
+	}
+	conf.Routing.Router.Use = "matrix"
+	conf.Routing.Router.Settings.Matrix = matrix
+
+	memory := make(map[string]int, len(models))
+	costs := make(map[string]int)
+	for modelID, model := range models {
+		memory[modelID] = model.Memory
+		if model.EvictCost != nil {
+			costs[modelID] = *model.EvictCost
+		}
+	}
+	logger := logmon.NewWriter(io.Discard)
+	swapper := &capacitySwapper{
+		solver: newCapacitySolver(capacity, memory, costs, capacityStrategy(strategy)),
+		logger: logger,
+	}
+	base, err := newBaseRouter("matrix", conf, processes, logger, swapper)
+	if err != nil {
+		t.Fatalf("newBaseRouter: %v", err)
+	}
+	base.testProcessed = make(chan struct{}, 64)
+	r := &Matrix{baseRouter: base}
+	go base.run()
+	t.Cleanup(func() {
+		if !r.shuttingDown.Load() {
+			_ = r.Shutdown(time.Second)
+		}
+	})
+	return r
+}
+
 func baseMatrixConfig() config.Config {
 	return config.Config{
 		HealthCheckTimeout: 5,
@@ -254,6 +292,139 @@ func TestMatrixSolver_EvictCostsPreferred(t *testing.T) {
 	if len(result.Evict) != 1 || result.Evict[0] != "c" {
 		t.Errorf("Evict=%v want [c]", result.Evict)
 	}
+}
+
+func TestMatrix_CapacityEvictsByCost(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	b := newFakeProcess("b")
+	b.markReady()
+	c := newFakeProcess("c")
+	c.autoReady = true
+	models := map[string]config.ModelConfig{
+		"a": {Memory: 25, EvictCost: new(100)},
+		"b": {Memory: 10, EvictCost: new(0)},
+		"c": {Memory: 15},
+	}
+	r := newTestCapacityMatrix(t, 40, "cost", models,
+		map[string]process.Process{"a": a, "b": b, "c": c})
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, newRequest("c"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	if got := a.stopCalls.Load(); got != 0 {
+		t.Errorf("a.stopCalls=%d want 0", got)
+	}
+	if got := b.stopCalls.Load(); got != 1 {
+		t.Errorf("b.stopCalls=%d want 1", got)
+	}
+}
+
+func TestMatrix_CapacityLRURefreshesOnGrant(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	b := newFakeProcess("b")
+	b.markReady()
+	c := newFakeProcess("c")
+	c.autoReady = true
+	models := map[string]config.ModelConfig{
+		"a": {Memory: 25},
+		"b": {Memory: 10},
+		"c": {Memory: 15},
+	}
+	r := newTestCapacityMatrix(t, 40, "lru", models,
+		map[string]process.Process{"a": a, "b": b, "c": c})
+
+	for _, modelID := range []string{"a", "b", "a"} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, newRequest(modelID))
+		if w.Code != http.StatusOK {
+			t.Fatalf("request %s status=%d body=%q", modelID, w.Code, w.Body.String())
+		}
+	}
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, newRequest("c"))
+	if got := a.stopCalls.Load(); got != 0 {
+		t.Errorf("a.stopCalls=%d want 0 (most recently granted)", got)
+	}
+	if got := b.stopCalls.Load(); got != 1 {
+		t.Errorf("b.stopCalls=%d want 1 (least recently granted)", got)
+	}
+}
+
+func TestMatrix_CapacityChoosesIdleAlternativeToBusyCheapModel(t *testing.T) {
+	a := newFakeProcess("a")
+	a.markReady()
+	a.serveBlock = make(chan struct{})
+	b := newFakeProcess("b")
+	b.markReady()
+	c := newFakeProcess("c")
+	c.autoReady = true
+	models := map[string]config.ModelConfig{
+		"a": {Memory: 25, EvictCost: new(0)},
+		"b": {Memory: 10, EvictCost: new(100)},
+		"c": {Memory: 15},
+	}
+	r := newTestCapacityMatrix(t, 40, "cost", models,
+		map[string]process.Process{"a": a, "b": b, "c": c})
+
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		r.ServeHTTP(httptest.NewRecorder(), newRequest("a"))
+	}()
+	waitSignal(t, a.serveStarted, "a ServeHTTP")
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, newRequest("c"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%q", w.Code, w.Body.String())
+	}
+	if got := a.stopCalls.Load(); got != 0 {
+		t.Errorf("a.stopCalls=%d want 0 while serving", got)
+	}
+	if got := b.stopCalls.Load(); got != 1 {
+		t.Errorf("b.stopCalls=%d want 1 as idle alternative", got)
+	}
+
+	close(a.serveBlock)
+	waitSignal(t, aDone, "a request completion")
+}
+
+func TestMatrix_CapacityCountsActiveSwapTarget(t *testing.T) {
+	a := newFakeProcess("a")
+	b := newFakeProcess("b")
+	b.autoReady = true
+	models := map[string]config.ModelConfig{
+		"a": {Memory: 30},
+		"b": {Memory: 30},
+	}
+	r := newTestCapacityMatrix(t, 40, "cost", models,
+		map[string]process.Process{"a": a, "b": b})
+
+	aDone := make(chan struct{})
+	go func() {
+		defer close(aDone)
+		r.ServeHTTP(httptest.NewRecorder(), newRequest("a"))
+	}()
+	waitProcessed(t, r.testProcessed, 1)
+
+	bDone := make(chan struct{})
+	go func() {
+		defer close(bDone)
+		r.ServeHTTP(httptest.NewRecorder(), newRequest("b"))
+	}()
+	waitProcessed(t, r.testProcessed, 1)
+	if got := b.runCalls.Load(); got != 0 {
+		t.Fatalf("b.runCalls=%d want 0 while a swap holds capacity", got)
+	}
+
+	a.markReady()
+	waitSignal(t, aDone, "a request completion")
+	waitSignal(t, bDone, "b request completion")
 }
 
 func newTestMatrixSolver(t *testing.T, sets config.OrderedSets, evictCosts map[string]int, modelNames ...string) *matrixSolver {
