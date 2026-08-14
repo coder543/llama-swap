@@ -98,12 +98,16 @@ func newTestMetricsMonitor(t *testing.T, logger *logmon.Monitor, maxMetrics int,
 	if err != nil {
 		t.Fatalf("store.New: %v", err)
 	}
+	mm := newMetricsMonitor(logger, maxMetrics, captureBufferMB, st)
 	t.Cleanup(func() {
+		if err := mm.Close(); err != nil {
+			t.Errorf("metricsMonitor.Close: %v", err)
+		}
 		if err := st.Close(); err != nil {
 			t.Errorf("store.Close: %v", err)
 		}
 	})
-	return newMetricsMonitor(logger, maxMetrics, captureBufferMB, st)
+	return mm
 }
 
 func metricsEntries(t *testing.T, mm *metricsMonitor) []ActivityLogEntry {

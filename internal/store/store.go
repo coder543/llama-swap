@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"math"
@@ -25,6 +26,8 @@ type TokenMetrics struct {
 	DraftTokens     int     `json:"draft_tokens"`
 	DraftAccTokens  int     `json:"draft_acc_tokens"`
 	InputTokens     int     `json:"input_tokens"`
+	GeneratedTokens int     `json:"generated_tokens"`
+	ReasoningTokens int     `json:"reasoning_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
@@ -65,7 +68,9 @@ var activitySortColumns = map[string]string{
 	"resp_content_type": "resp_content_type",
 	"cached":            "cache_tokens",
 	"prompt":            "input_tokens",
-	"generated":         "output_tokens",
+	"generated":         "generated_tokens",
+	"reasoning":         "reasoning_tokens",
+	"output":            "output_tokens",
 	"drafted":           "draft_tokens",
 	"prompt_speed":      "prompt_per_second",
 	"gen_speed":         "tokens_per_second",
@@ -92,12 +97,14 @@ type ActivityStatsQuery struct {
 }
 
 type ActivityStats struct {
-	TotalRequests       int            `json:"total_requests"`
-	TotalInputTokens    int            `json:"total_input_tokens"`
-	TotalOutputTokens   int            `json:"total_output_tokens"`
-	TotalCacheTokens    int            `json:"total_cache_tokens"`
-	PromptHistogram     *HistogramData `json:"prompt_histogram"`
-	GenerationHistogram *HistogramData `json:"gen_histogram"`
+	TotalRequests        int            `json:"total_requests"`
+	TotalInputTokens     int            `json:"total_input_tokens"`
+	TotalGeneratedTokens int            `json:"total_generated_tokens"`
+	TotalReasoningTokens int            `json:"total_reasoning_tokens"`
+	TotalOutputTokens    int            `json:"total_output_tokens"`
+	TotalCacheTokens     int            `json:"total_cache_tokens"`
+	PromptHistogram      *HistogramData `json:"prompt_histogram"`
+	GenerationHistogram  *HistogramData `json:"gen_histogram"`
 }
 
 type HistogramData struct {
@@ -191,9 +198,10 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 	res, err := s.db.ExecContext(ctx, `
 		INSERT INTO activity (
 			ts_created, model_id, req_path, resp_content_type, resp_status_code,
-			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens,
+			generated_tokens, reasoning_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
 		entry.Model,
 		entry.ReqPath,
@@ -203,6 +211,8 @@ func (s *Store) InsertActivity(ctx context.Context, entry ActivityLogEntry) (Act
 		entry.Tokens.DraftTokens,
 		entry.Tokens.DraftAccTokens,
 		entry.Tokens.InputTokens,
+		entry.Tokens.GeneratedTokens,
+		entry.Tokens.ReasoningTokens,
 		entry.Tokens.OutputTokens,
 		entry.Tokens.PromptPerSecond,
 		entry.Tokens.TokensPerSecond,
@@ -234,7 +244,8 @@ func (s *Store) ListActivity(ctx context.Context, query ActivityQuery) (Activity
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			id, ts_created, model_id, req_path, resp_content_type, resp_status_code,
-			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens,
+			generated_tokens, reasoning_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
 		LIMIT ? OFFSET ?`,
@@ -272,12 +283,21 @@ func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (Ac
 		SELECT
 			COUNT(*),
 			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(generated_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
 		FROM activity`+where, args...)
 
 	var stats ActivityStats
-	if err := row.Scan(&stats.TotalRequests, &stats.TotalInputTokens, &stats.TotalOutputTokens, &stats.TotalCacheTokens); err != nil {
+	if err := row.Scan(
+		&stats.TotalRequests,
+		&stats.TotalInputTokens,
+		&stats.TotalGeneratedTokens,
+		&stats.TotalReasoningTokens,
+		&stats.TotalOutputTokens,
+		&stats.TotalCacheTokens,
+	); err != nil {
 		return ActivityStats{}, fmt.Errorf("activity stats: %w", err)
 	}
 
@@ -288,6 +308,36 @@ func (s *Store) ActivityStats(ctx context.Context, query ActivityStatsQuery) (Ac
 	stats.PromptHistogram = calculateHistogramData(promptValues)
 	stats.GenerationHistogram = calculateHistogramData(genValues)
 	return stats, nil
+}
+
+// UpdateActivityReasoningTokens atomically applies the reasoning/visible-output
+// split for an existing activity row. The persisted generated count is the
+// authority for clamping so an upstream tokenizer cannot make visible output
+// negative. It returns false when the row was pruned before the async update.
+func (s *Store) UpdateActivityReasoningTokens(ctx context.Context, id, reasoningTokens int) (ActivityLogEntry, bool, error) {
+	row := s.db.QueryRowContext(ctx, `
+		UPDATE activity
+		SET
+			reasoning_tokens = MIN(MAX(?, 0), generated_tokens),
+			output_tokens = generated_tokens - MIN(MAX(?, 0), generated_tokens)
+		WHERE id = ?
+		RETURNING
+			id, ts_created, model_id, req_path, resp_content_type, resp_status_code,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens,
+			generated_tokens, reasoning_tokens, output_tokens,
+			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json`,
+		reasoningTokens,
+		reasoningTokens,
+		id,
+	)
+	entry, err := scanActivity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ActivityLogEntry{}, false, nil
+	}
+	if err != nil {
+		return ActivityLogEntry{}, false, fmt.Errorf("update activity reasoning tokens: %w", err)
+	}
+	return entry, true, nil
 }
 
 // speedValues reads both histogram source columns in a single scan. Zero
@@ -475,6 +525,8 @@ func scanActivity(scanner activityScanner) (ActivityLogEntry, error) {
 		&entry.Tokens.DraftTokens,
 		&entry.Tokens.DraftAccTokens,
 		&entry.Tokens.InputTokens,
+		&entry.Tokens.GeneratedTokens,
+		&entry.Tokens.ReasoningTokens,
 		&entry.Tokens.OutputTokens,
 		&entry.Tokens.PromptPerSecond,
 		&entry.Tokens.TokensPerSecond,

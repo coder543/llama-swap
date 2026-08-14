@@ -46,6 +46,8 @@ export interface TokenMetrics {
   draft_tokens: number;
   draft_acc_tokens: number;
   input_tokens: number;
+  generated_tokens: number;
+  reasoning_tokens: number;
   output_tokens: number;
   prompt_per_second: number;
   tokens_per_second: number;
@@ -173,6 +175,8 @@ export interface HistogramData {
 export interface ActivityStatsData {
   total_requests: number;
   total_input_tokens: number;
+  total_generated_tokens: number;
+  total_reasoning_tokens: number;
   total_output_tokens: number;
   total_cache_tokens: number;
   prompt_histogram: HistogramData | null;

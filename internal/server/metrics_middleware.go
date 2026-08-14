@@ -76,7 +76,8 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 
 			recorder := newBodyCopier(w)
 			next.ServeHTTP(recorder, r)
-			mm.record(data.ModelID, r, recorder, cf, reqBody, reqHeaders)
+			tokenizerTarget, _ := resolveReasoningTokenizerTarget(cfg, data.ModelID)
+			mm.record(data.ModelID, r, recorder, cf, reqBody, reqHeaders, tokenizerTarget)
 		})
 	}
 }
