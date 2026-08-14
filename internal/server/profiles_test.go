@@ -125,7 +125,7 @@ func TestServer_ProfileMiddleware_JSONAndFilters(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
 
-func TestServer_Profile_UpstreamPreservesBody(t *testing.T) {
+func TestServer_Profile_UpstreamAppliesFilters(t *testing.T) {
 	cfg := profileTestConfig(t)
 	local := newStubRouter([]string{"real", "hidden"}, "")
 	var gotBody string
@@ -146,7 +146,7 @@ func TestServer_Profile_UpstreamPreservesBody(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-	assert.Equal(t, `{"model":"public"}`, gotBody)
+	assert.JSONEq(t, `{"model":"public","thinking":true}`, gotBody)
 	assert.Equal(t, "real", gotModel)
 }
 

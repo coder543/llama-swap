@@ -157,6 +157,7 @@ var modelPostJSONRoutes = []string{
 	// see issue #728
 	"/v/chat/completions",
 	"/v/responses",
+	"/v/systemone",
 	"/v/completions",
 	"/v/messages",
 	"/v/messages/count_tokens",
@@ -415,6 +416,7 @@ func (s *Server) routes() {
 	upstreamChain := apiChain.Append(
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
+		CreateFilterMiddleware(s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
 	)
 	mux.HandleFunc("GET /upstream", handleUpstreamRedirect)
