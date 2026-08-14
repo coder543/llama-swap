@@ -16,6 +16,8 @@ export interface ActivitySummary {
   durationMs: number;
   cacheTokens: number;
   inputTokens: number;
+  generatedTokens: number;
+  reasoningTokens: number;
   outputTokens: number;
   draftTokens: number;
   draftAccTokens: number;
@@ -43,6 +45,8 @@ export function summarizeActivity(rows: ActivityLogEntry[]): ActivitySummary {
     durationMs: 0,
     cacheTokens: 0,
     inputTokens: 0,
+    generatedTokens: 0,
+    reasoningTokens: 0,
     outputTokens: 0,
     draftTokens: 0,
     draftAccTokens: 0,
@@ -77,6 +81,8 @@ export function summarizeActivity(rows: ActivityLogEntry[]): ActivitySummary {
     summary.durationMs += row.duration_ms;
     summary.cacheTokens += row.tokens.cache_tokens;
     summary.inputTokens += row.tokens.input_tokens;
+    summary.generatedTokens += row.tokens.generated_tokens;
+    summary.reasoningTokens += row.tokens.reasoning_tokens;
     summary.outputTokens += row.tokens.output_tokens;
     summary.draftTokens += row.tokens.draft_tokens;
     summary.draftAccTokens += row.tokens.draft_acc_tokens;
@@ -85,9 +91,9 @@ export function summarizeActivity(rows: ActivityLogEntry[]): ActivitySummary {
       promptTokens += row.tokens.input_tokens;
       promptSeconds += row.tokens.input_tokens / row.tokens.prompt_per_second;
     }
-    if (row.tokens.output_tokens > 0 && row.tokens.tokens_per_second > 0) {
-      genTokens += row.tokens.output_tokens;
-      genSeconds += row.tokens.output_tokens / row.tokens.tokens_per_second;
+    if (row.tokens.generated_tokens > 0 && row.tokens.tokens_per_second > 0) {
+      genTokens += row.tokens.generated_tokens;
+      genSeconds += row.tokens.generated_tokens / row.tokens.tokens_per_second;
     }
   }
 
@@ -123,6 +129,10 @@ export function activityCellText(row: ActivityLogEntry, columnId: string): strin
     case "prompt":
       return row.tokens.input_tokens.toLocaleString();
     case "generated":
+      return row.tokens.generated_tokens.toLocaleString();
+    case "reasoning":
+      return row.tokens.reasoning_tokens.toLocaleString();
+    case "output":
       return row.tokens.output_tokens.toLocaleString();
     case "drafted":
       return formatDrafted(row.tokens.draft_tokens, row.tokens.draft_acc_tokens);
@@ -170,8 +180,10 @@ export function summaryMarkdown(summary: ActivitySummary): string {
     ],
     [
       "Generated",
-      `${summary.outputTokens.toLocaleString()} (${formatSpeed(summary.tokensPerSecond)})`,
+      `${summary.generatedTokens.toLocaleString()} (${formatSpeed(summary.tokensPerSecond)})`,
     ],
+    ["Reasoning", summary.reasoningTokens.toLocaleString()],
+    ["Output", summary.outputTokens.toLocaleString()],
     ["Drafted", drafted],
   ];
 
