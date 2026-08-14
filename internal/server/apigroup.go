@@ -30,6 +30,7 @@ type apiModel struct {
 	Aliases       []string       `json:"aliases,omitempty"`
 	Capabilities  map[string]any `json:"capabilities,omitempty"`
 	ContextLength int            `json:"context_length,omitempty"`
+	Memory        int            `json:"memory,omitempty"`
 	// ReadySince is when the model last became ready (RFC 3339). Only set
 	// while the model is ready.
 	ReadySince string `json:"readySince,omitempty"`
@@ -114,6 +115,7 @@ func (s *Server) handleAPIActiveProfile(w http.ResponseWriter, r *http.Request) 
 // state (defaulting to "stopped"), followed by peer models.
 func (s *Server) modelStatus() []apiModel {
 	running := s.local.RunningStatus()
+	capacityEnabled := s.capacityTotal() > 0
 
 	ids := make([]string, 0, len(s.cfg.Models))
 	for id := range s.cfg.Models {
@@ -145,6 +147,10 @@ func (s *Server) modelStatus() []apiModel {
 		// event callbacks that have no request of their own.
 		caps := s.resolveCapabilities(s.shutdownCtx, id, mc)
 		_, capsMap, _, ctxLen := renderCapabilities(caps)
+		memory := 0
+		if capacityEnabled {
+			memory = mc.Memory
+		}
 		models = append(models, apiModel{
 			Id:              id,
 			Name:            mc.Name,
@@ -154,6 +160,7 @@ func (s *Server) modelStatus() []apiModel {
 			Aliases:         mc.Aliases,
 			Capabilities:    capsMap,
 			ContextLength:   ctxLen,
+			Memory:          memory,
 			ReadySince:      readySince,
 			UptimeMs:        uptimeMs,
 			LoadingProgress: loading.Progress,
@@ -515,6 +522,7 @@ const (
 	msgTypeInFlight    messageType = "inflight"
 	msgTypeUIConfig    messageType = "uiConfig"
 	msgTypeProfile     messageType = "profileChanged"
+	msgTypeCapacity    messageType = "capacity"
 )
 
 // sendDropReportInterval is how often an SSE handler reports messages that
@@ -615,6 +623,11 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 				send(messageEnvelope{Type: msgTypeModelStatus, Data: string(data)})
 			}
 		}
+		sendCapacity := func() {
+			if data, err := json.Marshal(map[string]int{"total": s.capacityTotal()}); err == nil {
+				send(messageEnvelope{Type: msgTypeCapacity, Data: string(data)})
+			}
+		}
 		sendActivity := func(id int) {
 			if j, err := json.Marshal(map[string]int{"id": id}); err == nil {
 				send(messageEnvelope{Type: msgTypeActivity, Data: string(j)})
@@ -643,7 +656,10 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 			event.On(func(e swaputil.ProcessStateChangeEvent) { sendModels() }),
 			event.On(func(e swaputil.ProcessLoadingEvent) { sendModels() }),
 			event.On(func(e swaputil.ModelCapabilitiesChangedEvent) { sendModels() }),
-			event.On(func(e swaputil.ConfigFileChangedEvent) { sendModels() }),
+			event.On(func(e swaputil.ConfigFileChangedEvent) {
+				sendCapacity()
+				sendModels()
+			}),
 			event.On(func(e swaputil.ProfileChangedEvent) {
 				sendProfile()
 				sendModels()
@@ -653,6 +669,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// initial payload
+		sendCapacity()
 		sendModels()
 		sendUIConfig()
 		sendProfile()

@@ -4,6 +4,7 @@
   import { link } from "svelte-spa-router";
   import {
     activeProfile,
+    capacityTotal,
     fetchPlaygroundModels,
     models,
     profiles,
@@ -16,6 +17,8 @@
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
   import Tag from "../components/Tag.svelte";
+  import CapacityUsage from "../components/CapacityUsage.svelte";
+  import { reservationColor } from "../lib/capacity";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Switch from "$lib/components/ui/switch/index.js";
@@ -56,12 +59,18 @@
   }
 </script>
 
-{#snippet modelRow(model: Model)}
+{#snippet modelRow(model: Model, activeRow = false)}
+  {@const dotColor = activeRow && $capacityTotal > 0 ? reservationColor(model.id) : undefined}
   {@const percent = loadingPercent(model)}
   {@const message = loadingMessage(model)}
-  <div class="hover:bg-muted/50 relative flex items-center gap-3 px-4 py-2.5">
+  {@const badges = listCapabilityBadges(model).filter((badge) => $showCapabilityTags || (activeRow && badge.key === "memory"))}
+  <div class="hover:bg-muted/50 relative flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5">
     {#if !model.peerID}
-      <span class={`size-2.5 shrink-0 rounded-full ${statusDotColor(model)}`}></span>
+      <span
+        aria-hidden="true"
+        class={`size-2.5 shrink-0 rounded-full ${dotColor ? "" : statusDotColor(model)}`}
+        style:background-color={dotColor}
+      ></span>
     {/if}
     <a
       href="/models/{encodeURIComponent(model.id)}"
@@ -79,15 +88,12 @@
         <div class="text-muted-foreground truncate text-xs italic" title={message}>{message}</div>
       {/if}
     </a>
-    {#if $showCapabilityTags}
-      {@const badges = listCapabilityBadges(model)}
-      {#if badges.length > 0}
-        <div class="hidden min-w-0 flex-wrap items-center gap-1 sm:flex">
-          {#each badges as badge (badge.key)}
-            <Tag class={`px-1.5 text-[0.625rem] ${capabilityBadgeClass[badge.key] ?? ""}`}>{badge.label}</Tag>
-          {/each}
-        </div>
-      {/if}
+    {#if badges.length > 0}
+      <div class="order-last flex w-full min-w-0 flex-wrap items-center gap-1 sm:order-none sm:w-auto">
+        {#each badges as badge (badge.key)}
+          <Tag class={`px-1.5 text-[0.625rem] ${capabilityBadgeClass[badge.key] ?? ""}`}>{badge.label}</Tag>
+        {/each}
+      </div>
     {/if}
     <span class="text-muted-foreground text-xs uppercase tracking-wide">
       {model.state}{#if percent !== undefined}&nbsp;<span class="tabular-nums">{percent}%</span>{/if}
@@ -117,7 +123,7 @@
   </div>
 {/snippet}
 
-{#snippet modelRows(sectionModels: Model[], emptyMessage?: string)}
+{#snippet modelRows(sectionModels: Model[], emptyMessage?: string, activeRows = false)}
   {#if sectionModels.length === 0}
     {#if emptyMessage}
       <div class="text-muted-foreground px-4 py-6 text-center text-sm">{emptyMessage}</div>
@@ -125,7 +131,7 @@
   {:else}
     <div class="divide-y">
       {#each sectionModels as model (model.id)}
-        {@render modelRow(model)}
+        {@render modelRow(model, activeRows)}
       {/each}
     </div>
   {/if}
@@ -134,11 +140,11 @@
 {#snippet modelSection(title: string, sectionModels: Model[], headerExtra?: Snippet)}
   <Card.Root class="shrink-0 gap-0 overflow-hidden py-0">
     <Card.Header class="shrink-0 border-b px-4 py-2.5">
-      <div class="flex items-center gap-2">
-        <Card.Title class="text-sm">{title}</Card.Title>
+      <div class="flex flex-wrap items-center gap-2">
+        <Card.Title class="shrink-0 text-sm">{title}</Card.Title>
         <span class="text-muted-foreground text-xs">{sectionModels.length}</span>
         {#if headerExtra}
-          <div class="ml-auto flex items-center gap-2">
+          <div class="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
             {@render headerExtra()}
           </div>
         {/if}
@@ -188,12 +194,17 @@
       </div>
     </Card.Header>
     <Card.Content class="p-0">
+      {#if $capacityTotal > 0}
+        <div class="border-b px-4 py-3">
+          <CapacityUsage showKey={false} />
+        </div>
+      {/if}
       {#if activeModels.length > 0}
         <div class="flex items-center gap-2 border-b px-4 py-2.5">
           <h3 class="pb-0 text-sm font-medium tracking-normal">Active models</h3>
           <span class="text-muted-foreground text-xs">{activeModels.length}</span>
         </div>
-        {@render modelRows(activeModels)}
+        {@render modelRows(activeModels, undefined, true)}
       {/if}
     </Card.Content>
   </Card.Root>

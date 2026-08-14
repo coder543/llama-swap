@@ -23,6 +23,7 @@ import { sortModels } from "../lib/modelUtils";
 
 // Stores
 export const models = writable<Model[]>([]);
+export const capacityTotal = writable<number>(0);
 export const playgroundModels = writable<Model[]>([]);
 export const profiles = writable<Profile[]>([]);
 export const activeProfile = writable<string | null>(null);
@@ -63,6 +64,7 @@ export function enableAPIEvents(enabled: boolean): void {
   if (!enabled) {
     apiEventSource?.close();
     apiEventSource = null;
+    capacityTotal.set(0);
     activityRevision.set(0);
     inFlightRequests.set(0);
     inflightRequestEntries.set([]);
@@ -92,6 +94,7 @@ export function enableAPIEvents(enabled: boolean): void {
       inflightRequestEntries.set([]);
       uiConfig.set(defaultUIConfig());
       models.set([]);
+      capacityTotal.set(0);
       playgroundModelsRequest++;
       playgroundModelsRefreshQueued = false;
       playgroundModels.set([]);
@@ -127,6 +130,12 @@ export function enableAPIEvents(enabled: boolean): void {
 export function handleAPIEventMessage(data: string): void {
   const message = JSON.parse(data) as APIEventEnvelope;
   switch (message.type) {
+    case "capacity": {
+      const { total } = JSON.parse(message.data) as { total: number };
+      capacityTotal.set(Number.isFinite(total) && total > 0 ? total : 0);
+      break;
+    }
+
     case "modelStatus": {
       const receivedAt = Date.now();
       const newModels = (JSON.parse(message.data) as Model[]).map((m) =>

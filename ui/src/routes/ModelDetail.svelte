@@ -13,6 +13,7 @@
   import ModelDetailsTab from "../components/model/ModelDetailsTab.svelte";
   import { modelServerPath } from "../lib/modelUtils";
   import { formatAbsoluteTime, formatUptime } from "../lib/format";
+  import { formatReservation } from "../lib/capacity";
 
   let modelId = $derived($params?.id ?? "");
 
@@ -72,6 +73,9 @@
                 <CopyableId value={model.id} class="-ml-1 font-mono text-xs" />
               {/if}
               <span class="text-xs uppercase tracking-wide">{model.state}</span>
+              {#if model.memory && model.memory > 0}
+                <span class="text-xs" title="Configured memory reservation, not measured usage">{formatReservation(model.memory)} reservation</span>
+              {/if}
               {#if percent !== undefined}
                 <span class="text-xs tabular-nums">{percent}%</span>
               {/if}

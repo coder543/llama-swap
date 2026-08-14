@@ -32,6 +32,8 @@ export interface Model {
   capabilities?: ModelCapabilities;
   modalities?: ModelModalities;
   context_length?: number;
+  // Configured capacity reservation, displayed as GB; not measured usage.
+  memory?: number;
   // when the model last became ready (RFC 3339); only set while ready
   readySince?: string;
   // how long the model had been ready when the server sent this (ms)
@@ -187,7 +189,7 @@ export interface PerformanceResponse {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "perfsys" | "perfgpu";
+  type: "modelStatus" | "capacity" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "perfsys" | "perfgpu";
   data: string;
 }
 

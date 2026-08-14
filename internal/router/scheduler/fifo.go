@@ -44,6 +44,9 @@ type FIFO struct {
 	reserved map[string]int
 	inFlight map[string]int
 	queued   []HandlerReq
+
+	lastGranted map[string]uint64
+	useCounter  uint64
 }
 
 // NewFIFO builds a FIFO scheduler. Per-model concurrency limits are derived
@@ -60,15 +63,16 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 	}
 
 	return &FIFO{
-		name:     name,
-		logger:   logger,
-		planner:  planner,
-		cfg:      cfg,
-		effects:  eff,
-		limits:   limits,
-		active:   make(map[string]*activeSwap),
-		reserved: make(map[string]int),
-		inFlight: make(map[string]int),
+		name:        name,
+		logger:      logger,
+		planner:     planner,
+		cfg:         cfg,
+		effects:     eff,
+		limits:      limits,
+		active:      make(map[string]*activeSwap),
+		reserved:    make(map[string]int),
+		inFlight:    make(map[string]int),
+		lastGranted: make(map[string]uint64),
 	}
 }
 
@@ -85,15 +89,17 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 //  3. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
 //     ServeHTTP immediately.
-//  4. Would collide with an in-flight swap (we'd stop their target, or they're
+//  4. The planner cannot make room without a protected model — park in the
+//     queue until a swap or serve completes.
+//  5. Would collide with an in-flight swap (we'd stop their target, or they're
 //     stopping us) — park in the queue for OnSwapDone to drain.
-//  5. Would evict a process that is still handling requests — park in the
+//  6. Would evict a process that is still handling requests — park in the
 //     queue. OnServeDone will retry when the busy process drains.
-//  6. Otherwise — start a new swap. This may run in parallel with other active
+//  7. Otherwise — start a new swap. This may run in parallel with other active
 //     swaps when their evict sets don't intersect.
 func (s *FIFO) OnRequest(req HandlerReq) {
 	// (1) Unknown model.
-	state, ok := s.effects.ModelState(req.Model)
+	processState, ok := s.effects.ModelState(req.Model)
 	if !ok {
 		s.logger.Debugf("%s: model %s not handled by this router", s.name, req.Model)
 		s.rejectAdmission(req, ErrModelNotFound)
@@ -111,33 +117,43 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 		return
 	}
 
-	running := s.runningSet(req.Model)
-	evict := s.planner.EvictionFor(req.Model, running)
+	planning := s.planningState(req.Model)
+	decision := s.planner.EvictionFor(req.Model, planning)
+	evict := decision.Evict
 
 	// (3) Fast path: ready, nothing to evict, and nobody is evicting us.
-	if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
+	if processState == process.StateReady && !decision.Blocked && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
 		s.logger.Debugf("%s: fast-path serving model %s (already ready)", s.name, req.Model)
 		s.grantHandler(req, req.Model)
 		return
 	}
 
-	// (4) Collision with an in-flight swap — queue.
+	// Capacity-based planners can distinguish "nothing to evict" from "no
+	// currently evictable combination can make room". Wait for a protected
+	// model's swap or request to finish, both of which re-drain the queue.
+	if decision.Blocked {
+		s.logger.Debugf("%s: queuing request for model %s (eviction plan blocked by active model)", s.name, req.Model)
+		s.enqueue(req)
+		return
+	}
+
+	// (5) Collision with an in-flight swap — queue.
 	if collidesWith(req.Model, evict, s.active) {
 		s.logger.Debugf("%s: queuing request for model %s (collides with in-flight swap)", s.name, req.Model)
 		s.enqueue(req)
 		return
 	}
 
-	// (5) Would evict a busy process — queue until it drains.
+	// (6) Would evict a busy process — queue until it drains.
 	if conflictsWithInFlight(evict, s.inFlight) {
 		s.logger.Debugf("%s: queuing request for model %s (would evict in-flight process)", s.name, req.Model)
 		s.enqueue(req)
 		return
 	}
 
-	// (6) Start a new (possibly parallel) swap.
+	// (7) Start a new (possibly parallel) swap.
 	s.logger.Debugf("%s: starting swap for model %s, evicting %v", s.name, req.Model, evict)
-	s.startSwap(req, evict, running)
+	s.startSwap(req, evict, planning)
 }
 
 // OnCancel removes a request whose client has disconnected from the queue and
@@ -290,6 +306,8 @@ func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
 
 	if s.effects.GrantServe(req, modelID) {
 		s.inFlight[modelID]++
+		s.useCounter++
+		s.lastGranted[modelID] = s.useCounter
 	} else {
 		s.release(modelID)
 	}
@@ -365,16 +383,16 @@ func (s *FIFO) limit(modelID string) int {
 	return defaultConcurrencyLimit
 }
 
-// startSwap records the swap as active and launches it via Effects. running is
-// the set EvictionFor saw, forwarded to OnSwapStart so the planner logs against
+// startSwap records the swap as active and launches it via Effects. state is
+// the snapshot EvictionFor saw, forwarded to OnSwapStart so the planner logs against
 // the same picture it decided on.
-func (s *FIFO) startSwap(initial HandlerReq, evict, running []string) {
+func (s *FIFO) startSwap(initial HandlerReq, evict []string, state PlanningState) {
 	s.active[initial.Model] = &activeSwap{
 		modelID: initial.Model,
 		evict:   evict,
 		waiters: []HandlerReq{initial},
 	}
-	s.planner.OnSwapStart(initial.Model, running)
+	s.planner.OnSwapStart(initial.Model, state)
 	s.effects.StartSwap(initial.Model, evict)
 }
 
@@ -418,11 +436,16 @@ func (s *FIFO) drainQueue() {
 			sw.waiters = append(sw.waiters, req)
 			continue
 		}
-		running := s.runningSet(req.Model)
-		evict := s.planner.EvictionFor(req.Model, running)
-		if state == process.StateReady && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
+		planning := s.planningState(req.Model)
+		decision := s.planner.EvictionFor(req.Model, planning)
+		evict := decision.Evict
+		if state == process.StateReady && !decision.Blocked && len(evict) == 0 && !collidesWith(req.Model, evict, s.active) {
 			s.logger.Debugf("%s: queued request for model %s now served fast-path", s.name, req.Model)
 			s.grantHandler(req, req.Model)
+			continue
+		}
+		if decision.Blocked {
+			remaining = append(remaining, req)
 			continue
 		}
 		if collidesWith(req.Model, evict, s.active) {
@@ -434,18 +457,18 @@ func (s *FIFO) drainQueue() {
 			continue
 		}
 		s.logger.Debugf("%s: queued request for model %s now starting swap, evicting %v", s.name, req.Model, evict)
-		s.startSwap(req, evict, running)
+		s.startSwap(req, evict, planning)
 	}
 	s.queued = remaining
 	broadcastQueuePositions(s.queued)
 }
 
-// runningSet is the live model set handed to the Swapper: every process the
+// planningState is the live model state handed to the Swapper: every process the
 // baseRouter reports as running, unioned with the targets of in-flight swaps
 // (excluding excludeActive, the model whose own swap is being decided — its
 // in-flight entry must not count as "already running"). The result is sorted so
 // eviction decisions derived from it are deterministic.
-func (s *FIFO) runningSet(excludeActive string) []string {
+func (s *FIFO) planningState(excludeActive string) PlanningState {
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(id string) {
@@ -462,7 +485,22 @@ func (s *FIFO) runningSet(excludeActive string) []string {
 		add(id)
 	}
 	sort.Strings(out)
-	return out
+
+	protected := make(map[string]struct{})
+	for id, count := range s.inFlight {
+		if count > 0 {
+			protected[id] = struct{}{}
+		}
+	}
+	for _, id := range activeTargets(s.active, excludeActive) {
+		protected[id] = struct{}{}
+	}
+
+	return PlanningState{
+		Running:     out,
+		Protected:   protected,
+		LastGranted: s.lastGranted,
+	}
 }
 
 // activeTargets returns the IDs of every in-flight swap target except exclude.

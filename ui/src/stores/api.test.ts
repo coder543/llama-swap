@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   activeProfile,
   activityRevision,
+  capacityTotal,
+  enableAPIEvents,
   fetchPlaygroundModels,
   fetchProfiles,
   fetchTailcatStatus,
@@ -25,6 +27,7 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals();
   models.set([]);
+  capacityTotal.set(0);
   playgroundModels.set([]);
   profiles.set([]);
   activeProfile.set(null);
@@ -77,6 +80,29 @@ describe("hardware api", () => {
 });
 
 describe("api store event handling", () => {
+  it("receives the capacity budget and resets it when the event stream is disabled", () => {
+    handleAPIEventMessage(JSON.stringify({ type: "capacity", data: JSON.stringify({ total: 115 }) }));
+    expect(get(capacityTotal)).toBe(115);
+    enableAPIEvents(false);
+    expect(get(capacityTotal)).toBe(0);
+    handleAPIEventMessage(JSON.stringify({ type: "capacity", data: JSON.stringify({ total: 0 }) }));
+    expect(get(capacityTotal)).toBe(0);
+  });
+
+  it("preserves per-model reservations and alphabetical order through state changes", () => {
+    const update = (state: string) => handleAPIEventMessage(JSON.stringify({
+      type: "modelStatus", data: JSON.stringify([
+        { id: "zeta", name: "Zeta", state, memory: 24 },
+        { id: "alpha", name: "Alpha", state: "stopped", memory: 12 },
+      ]),
+    }));
+    update("starting");
+    expect(get(models).map((model) => model.id)).toEqual(["alpha", "zeta"]);
+    expect(get(models)[1].memory).toBe(24);
+    update("ready");
+    expect(get(models).map((model) => model.id)).toEqual(["alpha", "zeta"]);
+  });
+
   it("anchors model uptime to the browser clock on receipt", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-26T12:00:00Z"));

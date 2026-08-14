@@ -1,4 +1,5 @@
 import type { Model } from "./types";
+import { formatReservation } from "./capacity";
 
 // Canonical capability key -> human label. Shared by the model Details tab
 // and the Models list so labels live in exactly one place.
@@ -45,13 +46,14 @@ export const capabilityBadgeClass: Record<string, string> = {
   function_calling: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300",
   reranker: "bg-indigo-500/15 text-indigo-700 dark:text-indigo-300",
   context: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
+  memory: "bg-teal-500/15 text-teal-700 dark:text-teal-300",
 };
 
 // Returns the capability badges for a Models list row: every reported
 // capability in canonical order (mirroring the Details tab tag set), with the
 // context window last so it sits on the right of the group.
 export function listCapabilityBadges(
-  model: Pick<Model, "capabilities" | "context_length">,
+  model: Pick<Model, "capabilities" | "context_length" | "memory">,
 ): CapabilityBadge[] {
   const badges: CapabilityBadge[] = [];
 
@@ -65,6 +67,9 @@ export function listCapabilityBadges(
   const ctx = model.context_length ?? 0;
   if (ctx > 0) {
     badges.push({ key: "context", label: formatContextLength(ctx) });
+  }
+  if (model.memory !== undefined && Number.isFinite(model.memory) && model.memory > 0) {
+    badges.push({ key: "memory", label: `${formatReservation(model.memory)} reserved` });
   }
 
   return badges;

@@ -9,6 +9,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/matrix"
 	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
 )
 
 type Matrix struct {
@@ -20,24 +21,41 @@ func NewMatrix(conf config.Config, logs *logmon.Group) (*Matrix, error) {
 	if mtx == nil {
 		return nil, fmt.Errorf("matrix router requires a matrix configuration")
 	}
-	if mtx.Program() == nil {
+	if mtx.Capacity != 0 || mtx.Program() == nil {
 		if err := config.ValidateMatrix(mtx, conf.Models); err != nil {
 			return nil, fmt.Errorf("compiling matrix configuration: %w", err)
 		}
 	}
-	models, mode := mtx.Program().SynthesizedOrphans()
-	switch mode {
-	case "synthesized":
-		logs.ProxyLogs.Infof("matrix: synthesized set %q = (%s)", matrix.OrphanSetName, strings.Join(models, " | "))
-	case "empty":
-		logs.ProxyLogs.Infof("matrix: synthesized set %q is empty; +%s terms dropped", matrix.OrphanSetName, matrix.OrphanSetName)
-	case "user-defined":
-		logs.ProxyLogs.Infof("matrix: set %q is user-defined; orphan synthesis disabled", matrix.OrphanSetName)
-	}
 
-	swapper := &matrixSwapper{
-		solver: newMatrixSolver(mtx.Program(), mtx.ResolvedEvictCosts()),
-		logger: logs.ProxyLogs,
+	var swapper scheduler.Swapper
+	if mtx.CapacityMode() {
+		memory := make(map[string]int, len(conf.Models))
+		costs := make(map[string]int)
+		for modelID, modelConfig := range conf.Models {
+			memory[modelID] = modelConfig.Memory
+			if modelConfig.EvictCost != nil {
+				costs[modelID] = *modelConfig.EvictCost
+			}
+		}
+		swapper = &capacitySwapper{
+			solver: newCapacitySolver(mtx.Capacity, memory, costs, capacityStrategy(mtx.Strategy)),
+			logger: logs.ProxyLogs,
+		}
+	} else {
+		models, mode := mtx.Program().SynthesizedOrphans()
+		switch mode {
+		case "synthesized":
+			logs.ProxyLogs.Infof("matrix: synthesized set %q = (%s)", matrix.OrphanSetName, strings.Join(models, " | "))
+		case "empty":
+			logs.ProxyLogs.Infof("matrix: synthesized set %q is empty; +%s terms dropped", matrix.OrphanSetName, matrix.OrphanSetName)
+		case "user-defined":
+			logs.ProxyLogs.Infof("matrix: set %q is user-defined; orphan synthesis disabled", matrix.OrphanSetName)
+		}
+		swapper = &matrixSwapper{
+			solver: newMatrixSolver(mtx.Program(), mtx.ResolvedEvictCosts()),
+			logger: logs.ProxyLogs,
+		}
+
 	}
 
 	// Build a process for every model in the config. Any model can run alone
@@ -93,11 +111,12 @@ func (p *matrixSwapper) solve(target string, running []string) solveResult {
 	return result
 }
 
-func (p *matrixSwapper) EvictionFor(target string, running []string) []string {
-	return p.solve(target, running).Evict
+func (p *matrixSwapper) EvictionFor(target string, state scheduler.PlanningState) scheduler.EvictionDecision {
+	return scheduler.EvictionDecision{Evict: p.solve(target, state.Running).Evict}
 }
 
-func (p *matrixSwapper) OnSwapStart(target string, running []string) {
+func (p *matrixSwapper) OnSwapStart(target string, state scheduler.PlanningState) {
+	running := state.Running
 	result := p.solve(target, running)
 	switch {
 	case len(result.Evict) > 0:

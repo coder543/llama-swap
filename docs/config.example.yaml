@@ -749,6 +749,14 @@ routing:
       #
       # A model that appears in no set can only run on its own.
       #
+      # Private capacity mode is an alternative to the set expressions below:
+      # matrix:
+      #   capacity: 128
+      #   strategy: cost # cost (default) or lru
+      # Set a positive memory reservation in GB on EVERY model; capacity is GB too.
+      # The UI shows reservations, not measured system/GPU memory usage.
+      # Optional model evictCost overrides memory as its eviction cost.
+      # Do not combine capacity with sets, vars, or evict_costs.
       matrix:
         # vars: optional aliases for model IDs
         # - names may contain alphanumeric, "-", or "." characters (1-32 chars)

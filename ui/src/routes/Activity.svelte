@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import type { ActivityLogEntry, ActivityStatsData } from "../lib/types";
-  import { activityRevision, getActivity, getActivityStats, inflightRequestEntries } from "../stores/api";
+  import { activityRevision, capacityTotal, getActivity, getActivityStats, inflightRequestEntries } from "../stores/api";
   import { connectionState } from "../stores/theme";
   import { persistentStore } from "../stores/persistent";
   import {
@@ -11,6 +11,7 @@
   } from "../lib/activityFilters";
   import ActivityStats from "../components/ActivityStats.svelte";
   import ActivityTable from "../components/ActivityTable.svelte";
+  import CapacityUsage from "../components/CapacityUsage.svelte";
 
   const storedPageSize = persistentStore<number>("activity-page-size", 25);
   const storedFilters = persistentStore<ActivityFilters>(
@@ -127,6 +128,12 @@
   <div class="mt-4 mb-4">
     <ActivityStats {stats} />
   </div>
+
+  {#if $capacityTotal > 0}
+    <div class="mb-4 rounded-xl border bg-card px-4 py-3">
+      <CapacityUsage />
+    </div>
+  {/if}
 
   <ActivityTable
     metrics={rows}

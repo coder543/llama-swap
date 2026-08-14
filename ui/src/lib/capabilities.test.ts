@@ -43,6 +43,12 @@ describe("listCapabilityBadges", () => {
     expect(listCapabilityBadges({ ...base })).toEqual([]);
   });
 
+  it("adds a GB reservation badge when configured, independently of discovered capabilities", () => {
+    expect(listCapabilityBadges({ memory: 24 })).toEqual([{ key: "memory", label: "24 GB reserved" }]);
+    expect(listCapabilityBadges({ memory: 0 })).toEqual([]);
+    expect(listCapabilityBadges({ memory: -1 })).toEqual([]);
+  });
+
   it("puts the context badge last (rightmost)", () => {
     const badges = listCapabilityBadges({
       capabilities: { vision: true },
