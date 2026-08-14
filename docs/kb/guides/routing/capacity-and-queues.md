@@ -1,13 +1,46 @@
 ---
 title: Routing capacity and request queues
-summary: Configure concurrencyLimit and globalConcurrencyLimit, and understand queued work while a model is loading or busy.
+summary: Configure memory capacity, eviction policy, concurrency limits, and queued work while a model is loading or busy.
 category: guides
 tags: [routing, queue, capacity, concurrency, concurrency-limit, max-concurrent-requests, global-concurrency-limit, rate-limit]
-config_keys: [routing, models.*.concurrencyLimit, globalConcurrencyLimit]
-updated: 2026-09-10
+config_keys: [routing, matrix.capacity, matrix.strategy, models.*.memory, models.*.evictCost, models.*.concurrencyLimit, globalConcurrencyLimit]
+updated: 2026-10-16
 ---
 
 # Routing capacity and request queues
+
+## Memory capacity and eviction
+
+Use matrix capacity mode to fit models into a shared memory budget. Choose
+consistent integer units, such as GB, and set a positive `memory` on every
+model. These values are planning estimates, not measured GPU usage.
+
+```yaml
+models:
+  small:
+    cmd: llama-server --model small.gguf --port ${PORT}
+    memory: 12
+  large:
+    cmd: llama-server --model large.gguf --port ${PORT}
+    memory: 24
+    evictCost: 50
+routing:
+  router:
+    use: matrix
+    settings:
+      matrix:
+        capacity: 32
+        strategy: cost
+```
+
+`cost` minimizes the summed eviction cost; an omitted `evictCost` defaults
+to the model's memory. Set it higher for models that are expensive to reload.
+`lru` instead evicts the least recently used idle models until enough space
+is free. Active requests are allowed to finish before their models are evicted.
+
+A model larger than capacity runs alone. Capacity mode cannot be mixed with
+`sets`, `vars`, or `evict_costs`. Omit capacity to retain upstream's
+set-expression mode, including `+auto:orphans`.
 
 There is no `models.*.maxConcurrentRequests` setting. The real per-model key
 is `models.*.concurrencyLimit`, which limits active parallel requests.
