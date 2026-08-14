@@ -56,6 +56,11 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 				swaputil.SendResponse(w, r, http.StatusInternalServerError, err.Error())
 				return
 			}
+			body, _, err = filterUnsupportedOpenAITools(body, requestEndpointPath(r, cfg))
+			if err != nil {
+				swaputil.SendResponse(w, r, http.StatusInternalServerError, err.Error())
+				return
+			}
 
 			r.Body = io.NopCloser(bytes.NewReader(body))
 			r.Header.Del("Transfer-Encoding")
@@ -65,6 +70,19 @@ func CreateFilterMiddleware(cfg config.Config) chain.Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// requestEndpointPath returns the path that will be sent to a model. Upstream
+// passthrough routes encode the model name in the public URL, so remove it
+// before applying endpoint-specific filters.
+func requestEndpointPath(r *http.Request, cfg config.Config) string {
+	if strings.HasPrefix(r.URL.Path, "/upstream/") {
+		_, _, remainingPath, found := swaputil.FindModelInPath(cfg, strings.TrimPrefix(r.URL.Path, "/upstream/"))
+		if found {
+			return remainingPath
+		}
+	}
+	return r.URL.Path
 }
 
 // CreateFormFilterMiddleware returns middleware that applies the UseModelName

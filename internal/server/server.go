@@ -305,6 +305,7 @@ func (s *Server) routes() {
 	upstreamChain := apiChain.Append(
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
+		CreateFilterMiddleware(s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
 	)
 	mux.HandleFunc("GET /upstream", handleUpstreamRedirect)

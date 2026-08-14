@@ -41,6 +41,7 @@
   import MiddleEllipsis from "./activity-table/MiddleEllipsis.svelte";
   import { formatDuration, formatSpeed, formatRelativeTime } from "../lib/format";
   import { formatBytes, liveElapsedMs, requestHeader, sessionID } from "../lib/inflight";
+  import { displayCaptureId } from "../lib/capture";
 
   interface Props {
     metrics: ActivityLogEntry[];
@@ -303,7 +304,7 @@
         id: "id",
         accessorKey: "id",
         header: "ID",
-        cell: ({ row }) => String(row.original.id + 1),
+        cell: ({ row }) => displayCaptureId(row.original.id),
       },
       {
         id: "time",

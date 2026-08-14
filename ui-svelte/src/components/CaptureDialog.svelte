@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ReqRespCapture } from "../lib/types";
+  import { captureTitle, parseSSEChat, type SSEChat } from "../lib/capture";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { copyText } from "../lib/clipboard";
@@ -76,31 +77,6 @@
   function getImageDataUrl(body: string, contentType: string): string {
     const mimeType = contentType.split(";")[0].trim();
     return `data:${mimeType};base64,${body}`;
-  }
-
-  interface SSEChat {
-    reasoning: string;
-    content: string;
-  }
-
-  function parseSSEChat(text: string): SSEChat {
-    const result: SSEChat = { reasoning: "", content: "" };
-    for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || !trimmed.startsWith("data: ")) continue;
-      const data = trimmed.slice(6);
-      if (data === "[DONE]") continue;
-      try {
-        const parsed = JSON.parse(data);
-        const delta = parsed.choices?.[0]?.delta;
-        if (delta?.content) result.content += delta.content;
-        if (delta?.reasoning_content) result.reasoning += delta.reasoning_content;
-        if (delta?.reasoning) result.reasoning += delta.reasoning;
-      } catch {
-        // skip unparseable lines
-      }
-    }
-    return result;
   }
 
   async function copyToClipboard(text: string, type: "req" | "resp") {
@@ -185,7 +161,7 @@
     {#if capture}
       <Dialog.Header class="border-b border-border px-4 py-3">
         <Dialog.Title class="text-lg font-bold">
-          Capture #{capture.id + 1}{#if capture.req_path}
+          {captureTitle(capture.id)}{#if capture.req_path}
             <span class="font-mono text-base font-normal text-muted-foreground">{capture.req_path}</span>{/if}
         </Dialog.Title>
       </Dialog.Header>
