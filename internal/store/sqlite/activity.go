@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -32,7 +33,9 @@ var activitySortColumns = map[string]string{
 	"resp_content_type": "resp_content_type",
 	"cached":            "cache_tokens",
 	"prompt":            "input_tokens",
-	"generated":         "output_tokens",
+	"generated":         "generated_tokens",
+	"reasoning":         "reasoning_tokens",
+	"output":            "output_tokens",
 	"drafted":           "draft_tokens",
 	"prompt_speed":      "prompt_per_second",
 	"gen_speed":         "tokens_per_second",
@@ -51,9 +54,9 @@ func (r *activityRepository) Insert(ctx context.Context, entry store.ActivityLog
 	res, err := r.db.ExecContext(ctx, `
 		INSERT INTO activity (
 			ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
-			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, generated_tokens, reasoning_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		entry.Timestamp.Unix(),
 		entry.Src,
 		entry.Model,
@@ -64,6 +67,8 @@ func (r *activityRepository) Insert(ctx context.Context, entry store.ActivityLog
 		entry.Tokens.DraftTokens,
 		entry.Tokens.DraftAccTokens,
 		entry.Tokens.InputTokens,
+		entry.Tokens.GeneratedTokens,
+		entry.Tokens.ReasoningTokens,
 		entry.Tokens.OutputTokens,
 		entry.Tokens.PromptPerSecond,
 		entry.Tokens.TokensPerSecond,
@@ -95,7 +100,7 @@ func (r *activityRepository) List(ctx context.Context, query store.ActivityQuery
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT
 			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
-			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, output_tokens,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens, generated_tokens, reasoning_tokens, output_tokens,
 			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json
 		FROM activity`+where+activityOrderBy(query)+`
 		LIMIT ? OFFSET ?`,
@@ -137,12 +142,14 @@ func (r *activityRepository) Stats(ctx context.Context, query store.ActivityStat
 		SELECT
 			COALESCE(MAX(id), 0),
 			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(generated_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0),
 			COALESCE(SUM(output_tokens), 0),
 			COALESCE(SUM(CASE WHEN cache_tokens > 0 THEN cache_tokens ELSE 0 END), 0)
 		FROM activity`+where, args...)
 
 	var stats store.ActivityStats
-	if err := row.Scan(&stats.TotalRequests, &stats.TotalInputTokens, &stats.TotalOutputTokens, &stats.TotalCacheTokens); err != nil {
+	if err := row.Scan(&stats.TotalRequests, &stats.TotalInputTokens, &stats.TotalGeneratedTokens, &stats.TotalReasoningTokens, &stats.TotalOutputTokens, &stats.TotalCacheTokens); err != nil {
 		return store.ActivityStats{}, fmt.Errorf("activity stats: %w", err)
 	}
 
@@ -153,6 +160,36 @@ func (r *activityRepository) Stats(ctx context.Context, query store.ActivityStat
 	stats.PromptHistogram = store.NewHistogram(promptValues)
 	stats.GenerationHistogram = store.NewHistogram(genValues)
 	return stats, nil
+}
+
+// UpdateReasoningTokens atomically applies the reasoning/visible-output
+// split for an existing activity row. The persisted generated count is the
+// authority for clamping so an upstream tokenizer cannot make visible output
+// negative. It returns false when the row was pruned before the async update.
+func (r *activityRepository) UpdateReasoningTokens(ctx context.Context, id, reasoningTokens int) (store.ActivityLogEntry, bool, error) {
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE activity
+		SET
+			reasoning_tokens = MIN(MAX(?, 0), generated_tokens),
+			output_tokens = generated_tokens - MIN(MAX(?, 0), generated_tokens)
+		WHERE id = ?
+		RETURNING
+			id, ts_created, src, model_id, req_path, resp_content_type, resp_status_code,
+			cache_tokens, draft_tokens, draft_acc_tokens, input_tokens,
+			generated_tokens, reasoning_tokens, output_tokens,
+			prompt_per_second, tokens_per_second, duration_ms, error_msg, metadata_json`,
+		reasoningTokens,
+		reasoningTokens,
+		id,
+	)
+	entry, err := scanActivity(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return store.ActivityLogEntry{}, false, nil
+	}
+	if err != nil {
+		return store.ActivityLogEntry{}, false, fmt.Errorf("update activity reasoning tokens: %w", err)
+	}
+	return entry, true, nil
 }
 
 // speedValues reads both histogram source columns in a single scan. Zero
@@ -303,6 +340,8 @@ func scanActivity(scanner activityScanner) (store.ActivityLogEntry, error) {
 		&entry.Tokens.DraftTokens,
 		&entry.Tokens.DraftAccTokens,
 		&entry.Tokens.InputTokens,
+		&entry.Tokens.GeneratedTokens,
+		&entry.Tokens.ReasoningTokens,
 		&entry.Tokens.OutputTokens,
 		&entry.Tokens.PromptPerSecond,
 		&entry.Tokens.TokensPerSecond,

@@ -54,11 +54,12 @@
       </div>
     </div>
   {/if}
-  <div class="grid grid-cols-4 gap-x-6 gap-y-1 text-sm">
+  <div class="grid grid-cols-5 gap-x-6 gap-y-1 text-sm">
     <div class="text-muted-foreground text-xs uppercase tracking-wider">Requests</div>
     <div class="text-muted-foreground text-xs uppercase tracking-wider">Cached</div>
     <div class="text-muted-foreground text-xs uppercase tracking-wider">Processed</div>
     <div class="text-muted-foreground text-xs uppercase tracking-wider">Generated</div>
+    <div class="text-muted-foreground text-xs uppercase tracking-wider">Output</div>
     <div class="text-sm">
       <span class="font-semibold">{nf.format(stats?.total_requests ?? 0)}</span> completed
     </div>
@@ -67,6 +68,15 @@
     </div>
     <div class="text-sm">
       <span class="font-semibold">{nf.format(stats?.total_input_tokens ?? 0)}</span> tokens
+    </div>
+    <div class="text-sm">
+      <span class="font-semibold">{nf.format(stats?.total_generated_tokens ?? 0)}</span> tokens
+      {#if (stats?.total_reasoning_tokens ?? 0) > 0}
+        <span class="text-muted-foreground">
+          (<span class="text-amber-600 dark:text-amber-400">{nf.format(stats?.total_reasoning_tokens ?? 0)}</span>
+          reasoning)
+        </span>
+      {/if}
     </div>
     <div class="text-sm">
       <span class="font-semibold">{nf.format(stats?.total_output_tokens ?? 0)}</span> tokens

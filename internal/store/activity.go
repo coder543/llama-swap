@@ -12,6 +12,8 @@ type TokenMetrics struct {
 	DraftTokens     int     `json:"draft_tokens"`
 	DraftAccTokens  int     `json:"draft_acc_tokens"`
 	InputTokens     int     `json:"input_tokens"`
+	GeneratedTokens int     `json:"generated_tokens"`
+	ReasoningTokens int     `json:"reasoning_tokens"`
 	OutputTokens    int     `json:"output_tokens"`
 	PromptPerSecond float64 `json:"prompt_per_second"`
 	TokensPerSecond float64 `json:"tokens_per_second"`
@@ -83,6 +85,8 @@ var activitySortKeys = []string{
 	"cached",
 	"prompt",
 	"generated",
+	"reasoning",
+	"output",
 	"drafted",
 	"prompt_speed",
 	"gen_speed",
@@ -129,12 +133,14 @@ type ActivityStatsQuery struct {
 
 // ActivityStats are aggregate totals and speed histograms over activity rows.
 type ActivityStats struct {
-	TotalRequests       int            `json:"total_requests"`
-	TotalInputTokens    int            `json:"total_input_tokens"`
-	TotalOutputTokens   int            `json:"total_output_tokens"`
-	TotalCacheTokens    int            `json:"total_cache_tokens"`
-	PromptHistogram     *HistogramData `json:"prompt_histogram"`
-	GenerationHistogram *HistogramData `json:"gen_histogram"`
+	TotalRequests        int            `json:"total_requests"`
+	TotalInputTokens     int            `json:"total_input_tokens"`
+	TotalGeneratedTokens int            `json:"total_generated_tokens"`
+	TotalReasoningTokens int            `json:"total_reasoning_tokens"`
+	TotalOutputTokens    int            `json:"total_output_tokens"`
+	TotalCacheTokens     int            `json:"total_cache_tokens"`
+	PromptHistogram      *HistogramData `json:"prompt_histogram"`
+	GenerationHistogram  *HistogramData `json:"gen_histogram"`
 }
 
 // HistogramData is a binned distribution with percentile summaries.
