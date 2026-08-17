@@ -57,10 +57,9 @@ export function formatAbsoluteTime(timestamp: string): string {
 }
 
 /** Format a timestamp as a relative time or local timestamp when older than a day. */
-export function formatRelativeTime(timestamp: string): string {
-  const now = new Date();
+export function formatRelativeTime(timestamp: string, nowMs = Date.now()): string {
   const date = new Date(timestamp);
-  const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000);
+  const diffInSeconds = Math.floor((nowMs - date.getTime()) / 1000);
   if (diffInSeconds < 5) return "now";
   if (diffInSeconds < 60) return `${diffInSeconds}s ago`;
   const diffInMinutes = Math.floor(diffInSeconds / 60);
