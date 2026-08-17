@@ -72,4 +72,12 @@ describe("formatRelativeTime", () => {
     const olderThanOneDay = new Date(2026, 5, 25, 12, 34, 56);
     expect(formatRelativeTime(olderThanOneDay.toISOString())).toBe("2026-06-25 12:34:56");
   });
+
+  it("formats against a supplied current time", () => {
+    const timestamp = new Date("2026-06-28T12:00:00Z").getTime();
+
+    expect(formatRelativeTime("2026-06-28T12:00:00Z", timestamp + 4_000)).toBe("now");
+    expect(formatRelativeTime("2026-06-28T12:00:00Z", timestamp + 5_000)).toBe("5s ago");
+    expect(formatRelativeTime("2026-06-28T12:00:00Z", timestamp + 120_000)).toBe("2m ago");
+  });
 });

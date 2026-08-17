@@ -253,7 +253,19 @@
   let dialogOpen = $state(false);
   let loadingCaptureId = $state<number | null>(null);
   let cancelingInflightIds = $state<string[]>([]);
+  let relativeTimeNowMs = $state(Date.now());
   let inflightNowMs = $state(performance.now());
+
+  $effect(() => {
+    if (metrics.length === 0) return;
+
+    relativeTimeNowMs = Date.now();
+    const timer = setInterval(() => {
+      relativeTimeNowMs = Date.now();
+    }, 1000);
+
+    return () => clearInterval(timer);
+  });
 
   $effect(() => {
     if (inflightRequests.length === 0) return;
@@ -312,7 +324,7 @@
         id: "time",
         accessorKey: "timestamp",
         header: "Time",
-        cell: ({ row }) => formatRelativeTime(row.original.timestamp),
+        cell: ({ row }) => formatRelativeTime(row.original.timestamp, relativeTimeNowMs),
       },
     ];
 
