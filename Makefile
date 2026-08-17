@@ -33,12 +33,12 @@ test:
 test-all:
 	go test -race -count=1 ./internal/...
 
-ui/node_modules:
-	cd ui-svelte && npm install
+ui-svelte/node_modules: ui-svelte/package.json ui-svelte/package-lock.json
+	cd ui-svelte && npm ci
 
-# build react UI into internal/server/ui_dist; the `embed_ui` build tag embeds
+# build Svelte UI into internal/server/ui_dist; the `embed_ui` build tag embeds
 # this output into the binary (see internal/server/embed.go)
-ui: ui/node_modules
+ui: ui-svelte/node_modules
 	cd ui-svelte && npm run build
 
 # Build OSX binary
