@@ -176,3 +176,10 @@ export function sortModels(models: Model[]): Model[] {
     return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
   });
 }
+
+// A model is shown even when unlisted models are hidden if it is not unlisted
+// at all, or it is currently running. Running unlisted models stay visible
+// regardless of the "show unlisted" toggle.
+export function visibleWhenUnlistedHidden(m: Model): boolean {
+  return !m.unlisted || isRunningModel(m);
+}

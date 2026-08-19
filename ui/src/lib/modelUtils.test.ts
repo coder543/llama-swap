@@ -5,6 +5,7 @@ import {
   groupModels,
   matchesCapabilities,
   isRunningModel,
+  visibleWhenUnlistedHidden,
   sortModels,
   matchesModel,
   modelServerPath,
@@ -318,5 +319,23 @@ describe("sortModels", () => {
     ];
     sortModels(models);
     expect(models.map((m) => m.id)).toEqual(["bbb", "aaa"]);
+  });
+});
+
+describe("visibleWhenUnlistedHidden", () => {
+  it("keeps non-unlisted models visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: false, state: "stopped" }))).toBe(true);
+  });
+
+  it("keeps a running unlisted model visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "ready" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "starting" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopping" }))).toBe(true);
+  });
+
+  it("hides an unlisted model that is not running", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopped" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "shutdown" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "unknown" }))).toBe(false);
   });
 });

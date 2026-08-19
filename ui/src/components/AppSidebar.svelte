@@ -9,7 +9,7 @@
   import { playgroundActivity, docsAgentStreaming } from "../stores/playgroundActivity";
   import { performanceEnabled, models, tailcatStatus } from "../stores/api";
   import { showUnlistedModels } from "../stores/modelDisplay";
-  import { isRunningModel } from "../lib/modelUtils";
+  import { visibleWhenUnlistedHidden } from "../lib/modelUtils";
   import { modelsMenuOpen } from "../stores/sidebar";
   import type { Model } from "../lib/types";
   import { isComposingKey } from "../lib/ime";
@@ -40,9 +40,7 @@
   }
 
   let visibleLocalModels = $derived(
-    $models.filter(
-      (model) => !model.peerID && ($showUnlistedModels || !model.unlisted || isRunningModel(model)),
-    ),
+    $models.filter((model) => !model.peerID && ($showUnlistedModels || visibleWhenUnlistedHidden(model))),
   );
   let visiblePeerModels = $derived(
     $models.filter((model) => model.peerID && ($showUnlistedModels || !model.unlisted)),
