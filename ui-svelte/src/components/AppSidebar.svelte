@@ -9,6 +9,7 @@
   import { playgroundActivity } from "../stores/playgroundActivity";
   import { performanceEnabled, models } from "../stores/api";
   import { showUnlistedModels } from "../stores/modelDisplay";
+  import { isRunningModel } from "../lib/modelUtils";
   import { modelsMenuOpen } from "../stores/sidebar";
   import type { Model } from "../lib/types";
   import ConnectionStatus from "./ConnectionStatus.svelte";
@@ -37,7 +38,9 @@
   }
 
   let visibleLocalModels = $derived(
-    $models.filter((model) => !model.peerID && ($showUnlistedModels || !model.unlisted)),
+    $models.filter(
+      (model) => !model.peerID && ($showUnlistedModels || !model.unlisted || isRunningModel(model)),
+    ),
   );
   let visiblePeerModels = $derived(
     $models.filter((model) => model.peerID && ($showUnlistedModels || !model.unlisted)),
@@ -90,10 +93,10 @@
   </Sidebar.Header>
 
   <Sidebar.Content>
-    <Sidebar.Group>
-      <Sidebar.GroupContent>
-        <Sidebar.Menu class="gap-1">
-          <Sidebar.MenuItem>
+    <Sidebar.Group class="min-h-0">
+      <Sidebar.GroupContent class="flex min-h-0 flex-col">
+        <Sidebar.Menu class="gap-1 min-h-0">
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={$currentRoute === "/" || isActive("/activity", $currentRoute)} tooltipContent="Activity">
               {#snippet child({ props })}
                 <a href="/" use:link {...props}>
@@ -104,7 +107,7 @@
             </Sidebar.MenuButton>
           </Sidebar.MenuItem>
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={isActive("/playground", $currentRoute)} tooltipContent="Playground">
               {#snippet child({ props })}
                 <a href="/playground" use:link {...props}>
@@ -115,15 +118,16 @@
             </Sidebar.MenuButton>
           </Sidebar.MenuItem>
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="flex min-h-8 flex-col">
             <Collapsible.Root
               open={$modelsMenuOpen}
               onOpenChange={(v) => modelsMenuOpen.set(v)}
-              class="gap-0"
+              class="gap-0 flex min-h-0 flex-col"
             >
               <Sidebar.MenuButton
                 isActive={$currentRoute.startsWith("/models")}
                 tooltipContent="Models"
+                class="shrink-0"
               >
                 {#snippet child({ props })}
                   <a href="/models" use:link {...props}>
@@ -152,7 +156,7 @@
                   </a>
                 {/snippet}
               </Sidebar.MenuButton>
-              <Collapsible.Content>
+              <Collapsible.Content class="min-h-0 overflow-auto">
                 <Sidebar.MenuSub>
                   {#each visibleLocalModels as model (model.id)}
                     {@render modelMenuItem(model)}
@@ -170,7 +174,7 @@
             </Collapsible.Root>
           </Sidebar.MenuItem>
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={isActive("/logs", $currentRoute)} tooltipContent="Logs">
               {#snippet child({ props })}
                 <a href="/logs" use:link {...props}>
@@ -182,7 +186,7 @@
           </Sidebar.MenuItem>
 
           {#if $performanceEnabled}
-            <Sidebar.MenuItem>
+            <Sidebar.MenuItem class="shrink-0">
               <Sidebar.MenuButton isActive={isActive("/performance", $currentRoute)} tooltipContent="Performance">
                 {#snippet child({ props })}
                   <a href="/performance" use:link {...props}>
@@ -194,7 +198,7 @@
             </Sidebar.MenuItem>
           {/if}
 
-          <Sidebar.MenuItem>
+          <Sidebar.MenuItem class="shrink-0">
             <Sidebar.MenuButton isActive={isActive("/hardware", $currentRoute)} tooltipContent="Hardware">
               {#snippet child({ props })}
                 <a href="/hardware" use:link {...props}>

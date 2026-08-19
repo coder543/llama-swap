@@ -17,6 +17,7 @@ import type {
   HardwareSnapshot,
 } from "../lib/types";
 import { connectionState } from "./theme";
+import { sortModels } from "../lib/modelUtils";
 
 const LOG_LENGTH_LIMIT = 1024 * 100; /* 100KB of log data */
 
@@ -137,11 +138,8 @@ export function handleAPIEventMessage(data: string): void {
   switch (message.type) {
     case "modelStatus": {
       const newModels = JSON.parse(message.data) as Model[];
-      // Sort models by name and id
-      newModels.sort((a, b) => {
-        return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
-      });
-      models.set(newModels);
+      // Running models first, then alphabetically by name and id
+      models.set(sortModels(newModels));
       break;
     }
 

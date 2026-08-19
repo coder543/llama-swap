@@ -11,6 +11,24 @@ export function modelServerPath(modelId: string): string {
   return `/upstream/${encodeURIComponent(modelId)}/`;
 }
 
+// A model is running when its process is loaded (ready), in the middle of
+// loading (starting), or in the middle of unloading (stopping). This mirrors
+// the backend's RunningModels(), which excludes stopped and shutdown.
+export function isRunningModel(m: Model): boolean {
+  return m.state === "ready" || m.state === "starting" || m.state === "stopping";
+}
+
+// Sorts models with running ones first, then alphabetically by name and id.
+// Returns a new array, leaving the input untouched.
+export function sortModels(models: Model[]): Model[] {
+  return [...models].sort((a, b) => {
+    const runningA = isRunningModel(a) ? 0 : 1;
+    const runningB = isRunningModel(b) ? 0 : 1;
+    if (runningA !== runningB) return runningA - runningB;
+    return (a.name + a.id).localeCompare(b.name + b.id, undefined, { numeric: true });
+  });
+}
+
 export function matchesCapabilities(model: Model, required: string[], matchAny = false): boolean {
   if (!required.length) return true;
   if (!model.capabilities) return false;
