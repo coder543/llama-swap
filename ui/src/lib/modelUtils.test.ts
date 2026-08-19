@@ -4,6 +4,8 @@ import {
   filterModelOptions,
   groupModels,
   matchesCapabilities,
+  isRunningModel,
+  sortModels,
   matchesModel,
   modelServerPath,
   MODEL_GROUP_LOCAL,
@@ -260,5 +262,61 @@ describe("filterModelOptions", () => {
 
   it("matches an alias by its own name", () => {
     expect(filterModelOptions(options, "fast").map((o) => o.value)).toEqual(["fast"]);
+  });
+});
+
+describe("isRunningModel", () => {
+  it("treats ready, starting, and stopping as running", () => {
+    expect(isRunningModel(makeModel({ state: "ready" }))).toBe(true);
+    expect(isRunningModel(makeModel({ state: "starting" }))).toBe(true);
+    expect(isRunningModel(makeModel({ state: "stopping" }))).toBe(true);
+  });
+
+  it("treats stopped, shutdown, and unknown as not running", () => {
+    expect(isRunningModel(makeModel({ state: "stopped" }))).toBe(false);
+    expect(isRunningModel(makeModel({ state: "shutdown" }))).toBe(false);
+    expect(isRunningModel(makeModel({ state: "unknown" }))).toBe(false);
+  });
+});
+
+describe("sortModels", () => {
+  it("puts running models before non-running ones", () => {
+    const models = [
+      makeModel({ id: "aaa", name: "aaa", state: "stopped" }),
+      makeModel({ id: "ddd", name: "ddd", state: "starting" }),
+      makeModel({ id: "ccc", name: "ccc", state: "stopped" }),
+      makeModel({ id: "bbb", name: "bbb", state: "ready" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["bbb", "ddd", "aaa", "ccc"]);
+  });
+
+  it("uses numeric-aware ordering for digit-bearing ids", () => {
+    const models = [
+      makeModel({ id: "model-10", name: "model-10", state: "stopped" }),
+      makeModel({ id: "model-2", name: "model-2", state: "stopped" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["model-2", "model-10"]);
+  });
+
+  it("sorts alphabetically by name and id within each group", () => {
+    const models = [
+      makeModel({ id: "zeta", name: "zeta", state: "stopped" }),
+      makeModel({ id: "alpha", name: "alpha", state: "ready" }),
+      makeModel({ id: "mid", name: "mid", state: "stopped" }),
+      makeModel({ id: "beta", name: "beta", state: "stopping" }),
+    ];
+    const sorted = sortModels(models);
+    expect(sorted.map((m) => m.id)).toEqual(["alpha", "beta", "mid", "zeta"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const models = [
+      makeModel({ id: "bbb", name: "bbb", state: "stopped" }),
+      makeModel({ id: "aaa", name: "aaa", state: "ready" }),
+    ];
+    sortModels(models);
+    expect(models.map((m) => m.id)).toEqual(["bbb", "aaa"]);
   });
 });
