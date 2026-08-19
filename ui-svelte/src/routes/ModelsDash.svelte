@@ -21,7 +21,7 @@
   import * as Switch from "$lib/components/ui/switch/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
   import { PowerOff, Loader2, ExternalLink, SquareStack } from "@lucide/svelte";
-  import { modelServerPath } from "../lib/modelUtils";
+  import { modelServerPath, visibleWhenUnlistedHidden } from "../lib/modelUtils";
 
   let unloadingAll = $state(false);
 
@@ -30,7 +30,7 @@
   });
 
   let visibleModels = $derived(
-    $showUnlisted ? $models : $models.filter((m) => !m.unlisted)
+    $showUnlisted ? $models : $models.filter(visibleWhenUnlistedHidden)
   );
   let localModels = $derived(visibleModels.filter((model) => !model.peerID));
   let peerModels = $derived(visibleModels.filter((model) => model.peerID));

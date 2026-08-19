@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { matchesCapabilities, groupModels, modelServerPath, isRunningModel, sortModels } from "./modelUtils";
+import {
+  matchesCapabilities,
+  groupModels,
+  modelServerPath,
+  isRunningModel,
+  visibleWhenUnlistedHidden,
+  sortModels,
+} from "./modelUtils";
 import type { Model } from "./types";
 
 function makeModel(overrides: Partial<Model> = {}): Model {
@@ -133,6 +140,24 @@ describe("isRunningModel", () => {
     expect(isRunningModel(makeModel({ state: "stopped" }))).toBe(false);
     expect(isRunningModel(makeModel({ state: "shutdown" }))).toBe(false);
     expect(isRunningModel(makeModel({ state: "unknown" }))).toBe(false);
+  });
+});
+
+describe("visibleWhenUnlistedHidden", () => {
+  it("keeps non-unlisted models visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: false, state: "stopped" }))).toBe(true);
+  });
+
+  it("keeps a running unlisted model visible", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "ready" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "starting" }))).toBe(true);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopping" }))).toBe(true);
+  });
+
+  it("hides an unlisted model that is not running", () => {
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "stopped" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "shutdown" }))).toBe(false);
+    expect(visibleWhenUnlistedHidden(makeModel({ unlisted: true, state: "unknown" }))).toBe(false);
   });
 });
 

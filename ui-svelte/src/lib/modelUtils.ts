@@ -18,6 +18,13 @@ export function isRunningModel(m: Model): boolean {
   return m.state === "ready" || m.state === "starting" || m.state === "stopping";
 }
 
+// A model is shown even when unlisted models are hidden if it is not unlisted
+// at all, or it is currently running. Running unlisted models stay visible
+// regardless of the "show unlisted" toggle.
+export function visibleWhenUnlistedHidden(m: Model): boolean {
+  return !m.unlisted || isRunningModel(m);
+}
+
 // Sorts models with running ones first, then alphabetically by name and id.
 // Returns a new array, leaving the input untouched.
 export function sortModels(models: Model[]): Model[] {
