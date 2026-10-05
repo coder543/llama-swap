@@ -85,6 +85,7 @@ func (s *Server) setActiveProfile(name string) (bool, error) {
 var modelPostJSONRoutes = []string{
 	"/v1/chat/completions",
 	"/v1/responses",
+	"/v1/systemone",
 	"/v1/completions",
 	"/v1/messages",
 	"/v1/messages/count_tokens",
@@ -108,6 +109,7 @@ var modelPostJSONRoutes = []string{
 	// see issue #728
 	"/v/chat/completions",
 	"/v/responses",
+	"/v/systemone",
 	"/v/completions",
 	"/v/messages",
 	"/v/messages/count_tokens",
