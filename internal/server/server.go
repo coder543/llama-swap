@@ -157,6 +157,7 @@ var modelPostJSONRoutes = []string{
 	// see issue #728
 	"/v/chat/completions",
 	"/v/responses",
+	"/v/systemone",
 	"/v/completions",
 	"/v/messages",
 	"/v/messages/count_tokens",

@@ -18,6 +18,7 @@ Built in Go for performance and simplicity, llama-swap has zero dependencies and
   - `v1/completions`
   - `v1/chat/completions`
   - `v1/responses`
+  - `v1/systemone` - typed decisions from llama.cpp decision models
   - `v1/embeddings`
   - `v1/models` - list available models
   - `v1/audio/speech` ([#36](https://github.com/mostlygeek/llama-swap/issues/36))
