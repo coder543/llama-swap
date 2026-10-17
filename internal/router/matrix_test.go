@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,33 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 )
+
+func TestMatrix_CapacityConstructor(t *testing.T) {
+	conf, err := config.LoadConfigFromReader(strings.NewReader(`
+models:
+  small:
+    cmd: echo ${PORT}
+    memory: 12
+routing:
+  router:
+    use: matrix
+    settings:
+      matrix:
+        capacity: 32
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Capacity intentionally has no compiled DSL program. Orphan synthesis
+	// must only inspect a program in set-expression mode.
+	r, err := NewMatrix(conf, logmon.NewGroup(io.Discard, false, false, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Shutdown(time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // newTestMatrix builds a Matrix router from supplied processes, bypassing
 // NewMatrix's call to process.New.

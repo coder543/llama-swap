@@ -17,13 +17,6 @@ import (
 	"time"
 )
 
-// sleepLevel represents the vLLM sleep level.
-type sleepLevel int
-
-const (
-	sleepLevel1 sleepLevel = 1
-)
-
 // vllmWrapper serves as a cmd/cmdStop wrapper for vLLM with sleep mode.
 func main() {
 	if len(os.Args) < 2 {

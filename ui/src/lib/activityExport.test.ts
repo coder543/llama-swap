@@ -337,6 +337,8 @@ describe("summaryMarkdown", () => {
         `| Cached | ${(12480).toLocaleString()} |`,
         `| Prompt | ${(5678).toLocaleString()} (412.30 t/s) |`,
         `| Generated | ${(1904).toLocaleString()} (48.15 t/s) |`,
+        "| Reasoning | 0 |",
+        `| Output | ${(1904).toLocaleString()} |`,
         "| Drafted | 61.7% 148/240 |",
       ].join("\n")
     );
@@ -352,6 +354,8 @@ describe("summaryMarkdown", () => {
         "| Cached | 0 |",
         "| Prompt | 0 (unknown) |",
         "| Generated | 0 (unknown) |",
+        "| Reasoning | 0 |",
+        "| Output | 0 |",
         "| Drafted | - |",
       ].join("\n")
     );

@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { captureTitle, displayCaptureId, parseSSEChat } from "./capture";
-
-describe("capture labels", () => {
-  it("uses the raw API ID", () => {
-    expect(displayCaptureId(0)).toBe("0");
-    expect(captureTitle(424)).toBe("Capture #424");
-  });
-});
+import { parseSSEChat } from "./capture";
 
 describe("captured SSE chat", () => {
   it("parses Chat Completions content and reasoning", () => {

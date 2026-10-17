@@ -467,7 +467,7 @@ func FindModelInPath(cfg config.Config, path string) (searchName, realName, rema
 func EscapedPathSuffix(escapedPath, decodedPrefix string) string {
 	rawIndex, prefixIndex := 0, 0
 	for rawIndex < len(escapedPath) && prefixIndex < len(decodedPrefix) {
-		end := rawIndex + 1
+		var end int
 		if escapedPath[rawIndex] == '%' {
 			end = rawIndex + 3
 		} else {

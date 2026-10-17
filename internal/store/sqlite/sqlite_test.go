@@ -238,13 +238,13 @@ func TestStore_ListActivitySort(t *testing.T) {
 	}
 	defer st.Close()
 
-	// Insert rows whose output_tokens ordering differs from insertion (id) order.
+	// Insert rows whose generated_tokens ordering differs from insertion (id) order.
 	outputs := []int{30, 10, 20}
 	for i, out := range outputs {
 		if _, err := st.Activity().Insert(ctx, store.ActivityLogEntry{
 			Timestamp: time.Unix(int64(100+i), 0),
 			Model:     "m1",
-			Tokens:    store.TokenMetrics{OutputTokens: out},
+			Tokens:    store.TokenMetrics{GeneratedTokens: out, OutputTokens: out},
 		}); err != nil {
 			t.Fatalf("InsertActivity: %v", err)
 		}
@@ -256,7 +256,7 @@ func TestStore_ListActivitySort(t *testing.T) {
 	}
 	gotAsc := []int{}
 	for _, e := range asc.Data {
-		gotAsc = append(gotAsc, e.Tokens.OutputTokens)
+		gotAsc = append(gotAsc, e.Tokens.GeneratedTokens)
 	}
 	if len(gotAsc) != 3 || gotAsc[0] != 10 || gotAsc[1] != 20 || gotAsc[2] != 30 {
 		t.Fatalf("ascending generated sort = %v", gotAsc)
@@ -268,7 +268,7 @@ func TestStore_ListActivitySort(t *testing.T) {
 	}
 	gotDesc := []int{}
 	for _, e := range desc.Data {
-		gotDesc = append(gotDesc, e.Tokens.OutputTokens)
+		gotDesc = append(gotDesc, e.Tokens.GeneratedTokens)
 	}
 	if len(gotDesc) != 3 || gotDesc[0] != 30 || gotDesc[1] != 20 || gotDesc[2] != 10 {
 		t.Fatalf("descending generated sort = %v", gotDesc)

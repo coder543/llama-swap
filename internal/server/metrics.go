@@ -230,7 +230,6 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, target reasoningTok
 	entries := []ActivityLogEntry{updated}
 	mp.overlayCaptureState(entries)
 	mp.emitMetric(entries[0])
-
 }
 
 // record parses a completed response body and stores/emits an activity entry.
