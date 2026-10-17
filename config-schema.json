@@ -288,7 +288,7 @@
                 "path": {
                     "type": "string",
                     "minLength": 1,
-                    "description": "SQLite database file path for persistent activity logs."
+                    "description": "SQLite database file path for persistent activity logs, discovered capabilities, and startup timing history."
                 }
             },
             "required": [

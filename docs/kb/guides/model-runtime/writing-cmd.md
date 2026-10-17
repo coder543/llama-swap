@@ -3,8 +3,8 @@ title: Writing the cmd for a model
 summary: Minimal model config using cmd and ${PORT}, plus proxy, checkEndpoint loading progress, Docker, and llama-server's --jinja flag.
 category: guides
 tags: [cmd, port, proxy, model-id, check-endpoint, health-check, loading-progress, tools, tool-calling, jinja, llama-server, minimal, configuration, getting-started, docker, container]
-config_keys: [models.*.cmd, models.*.proxy, models.*.checkEndpoint, models.*.env, startPort, healthCheckTimeout]
-updated: 2026-10-07
+config_keys: [models.*.cmd, models.*.proxy, models.*.checkEndpoint, models.*.env, startPort, healthCheckTimeout, store.path]
+updated: 2026-10-16
 ---
 
 # Writing the `cmd` for a model
@@ -93,6 +93,23 @@ readiness endpoint.
 
 ### Loading progress
 
+llama-swap measures each successful startup, from starting the process until
+it passes its readiness check. Subsequent loads show a time-based progress
+bar using the average of that model's last three successful startup times.
+The percentage is marked `~` and the UI shows the estimated total and
+remaining time. Failed or cancelled attempts do not affect the average.
+
+The first load has no estimate. Estimates stop at 99% until the readiness
+check actually passes; a slower load is labelled as taking longer than
+expected. This estimate does not extend `healthCheckTimeout`.
+
+Startup history is kept in the existing cache and survives restarts when
+`store.path` is configured. Changing a model's resolved command, environment,
+proxy or readiness endpoint starts a new history. Queue time waiting for
+another model to unload is excluded.
+
+#### Backend-reported progress
+
 While the server is not ready, it can report how far along it is by answering
 the health check with a non-200 status and a JSON body like this:
 
@@ -108,8 +125,8 @@ the health check with a non-200 status and a JSON body like this:
   is treated as a plain "not ready yet". llama-server's own loading response
   falls in this group.
 
-The Models page and the model's detail page show the percentage, a progress
-bar and the message while the model starts.
+Backend-reported numeric progress takes precedence over the time estimate.
+The Models page and the model's detail page show it and its message.
 
 Each time the reported `progress` value changes, llama-swap restarts the
 `healthCheckTimeout` countdown. The timeout then limits how long a load may go

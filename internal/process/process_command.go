@@ -182,6 +182,13 @@ func (p *ProcessCommand) run() {
 		old := state
 		state = s
 		next := &Status{State: s}
+		previous := p.status.Load()
+		if s == StateStarting {
+			next.StartingSince = time.Now()
+			if old == StateStarting {
+				next.StartingSince = previous.StartingSince
+			}
+		}
 		if s == StateReady {
 			if old == StateReady {
 				next.ReadySince = p.status.Load().ReadySince
@@ -191,10 +198,15 @@ func (p *ProcessCommand) run() {
 		}
 		p.status.Store(next)
 		if old != s {
+			var startupDuration time.Duration
+			if old == StateStarting && s == StateReady && !previous.StartingSince.IsZero() {
+				startupDuration = next.ReadySince.Sub(previous.StartingSince)
+			}
 			event.Emit(swaputil.ProcessStateChangeEvent{
-				ProcessName: p.id,
-				OldState:    string(old),
-				NewState:    string(s),
+				ProcessName:     p.id,
+				OldState:        string(old),
+				NewState:        string(s),
+				StartupDuration: startupDuration,
 			})
 		}
 	}

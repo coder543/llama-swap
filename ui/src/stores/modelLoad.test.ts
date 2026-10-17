@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadingMessage, loadingPercent } from "./modelLoad";
+import { isEstimatedLoading, loadingMessage, loadingPercent } from "./modelLoad";
 import type { Model } from "../lib/types";
 
 function model(fields: Partial<Model>): Model {
@@ -7,6 +7,26 @@ function model(fields: Partial<Model>): Model {
 }
 
 describe("loadingPercent", () => {
+  it("predicts from elapsed time and stops below 100 until ready", () => {
+    const m = model({ state: "starting", estimatedLoadMs: 10000, loadingStartedAt: 1000 });
+    expect(loadingPercent(m, 6000)).toBe(50);
+    expect(loadingPercent(m, 11000)).toBe(99);
+    expect(loadingPercent(m, 21000)).toBe(99);
+    expect(loadingPercent(m, 500)).toBe(0);
+    expect(isEstimatedLoading(m)).toBe(true);
+    expect(loadingPercent({ ...m, state: "ready" }, 11000)).toBeUndefined();
+    expect(loadingMessage(m, 6000)).toContain("5s remaining");
+    expect(loadingMessage(m, 11000)).toContain("Taking longer");
+  });
+
+  it("prefers reported progress over timing history and rejects missing history", () => {
+    const m = model({ state: "starting", estimatedLoadMs: 10000, loadingStartedAt: 1000, loadingProgress: 0.2 });
+    expect(loadingPercent(m, 6000)).toBe(20);
+    expect(isEstimatedLoading(m)).toBe(false);
+    expect(loadingPercent(model({ state: "starting", estimatedLoadMs: 0, loadingStartedAt: 1000 }), 6000)).toBeUndefined();
+    expect(loadingPercent(model({ state: "starting", estimatedLoadMs: 10000 }), 6000)).toBeUndefined();
+  });
+
   it("rounds the reported fraction down to a whole percentage", () => {
     expect(loadingPercent(model({ state: "starting", loadingProgress: 0.426 }))).toBe(42);
     expect(loadingPercent(model({ state: "starting", loadingProgress: 0 }))).toBe(0);

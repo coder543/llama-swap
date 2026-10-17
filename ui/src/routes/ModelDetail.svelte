@@ -1,7 +1,7 @@
 <script lang="ts">
   import { params } from "svelte-spa-router";
   import { models } from "../stores/api";
-  import { loadingMessage, loadingPercent, statusDotColor } from "../stores/modelLoad";
+  import { isEstimatedLoading, loadingMessage, loadingNow, loadingPercent, statusDotColor } from "../stores/modelLoad";
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
   import CopyableId from "../components/CopyableId.svelte";
@@ -45,9 +45,9 @@
   });
   let uptime = $derived(readyAt !== undefined ? formatUptime(now - readyAt) : "");
 
-  // Loading progress the upstream reports through its health check while starting.
-  let percent = $derived(loadingPercent(model));
-  let message = $derived(loadingMessage(model));
+  let percent = $derived(loadingPercent(model, $loadingNow));
+  let message = $derived(loadingMessage(model, $loadingNow));
+  let estimated = $derived(isEstimatedLoading(model));
 </script>
 
 <div class="flex h-full flex-col gap-4 overflow-y-auto p-2">
@@ -77,7 +77,7 @@
                 <span class="text-xs" title="Configured memory reservation, not measured usage">{formatReservation(model.memory)} reservation</span>
               {/if}
               {#if percent !== undefined}
-                <span class="text-xs tabular-nums">{percent}%</span>
+                <span class="text-xs tabular-nums" title={estimated ? "Estimated from recent successful starts" : undefined}>{estimated ? "~" : ""}{percent}%</span>
               {/if}
               {#if isReady}
                 <span class="text-xs" title={readySince ? `Ready since ${formatAbsoluteTime(readySince)}` : undefined}>
@@ -119,7 +119,7 @@
       </Card.Header>
       <!-- Load status bar; the state text in the header carries it for screen readers. -->
       {#if percent !== undefined}
-        <!-- The upstream reports progress, so fill the bar to it instead of pulsing. -->
+        <!-- Reported progress or a time-based estimate, capped until ready. -->
         <div aria-hidden="true" class="bg-muted h-1 w-full shrink-0">
           <div class="bg-warning h-full transition-[width] duration-500" style:width="{percent}%"></div>
         </div>

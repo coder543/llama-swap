@@ -103,6 +103,24 @@ describe("api store event handling", () => {
     expect(get(models).map((model) => model.id)).toEqual(["alpha", "zeta"]);
   });
 
+  it("anchors an ongoing load to this browser on reconnect", () => {
+    vi.spyOn(Date, "now").mockReturnValue(100_000);
+    try {
+      handleAPIEventMessage(JSON.stringify({
+        type: "modelStatus",
+        data: JSON.stringify([{ id: "loading", state: "starting", loadingElapsedMs: 20_000, estimatedLoadMs: 60_000 }]),
+      }));
+      expect(get(models)[0].loadingStartedAt).toBe(80_000);
+      handleAPIEventMessage(JSON.stringify({
+        type: "modelStatus",
+        data: JSON.stringify([{ id: "loading", state: "ready", uptimeMs: 100 }]),
+      }));
+      expect(get(models)[0].loadingStartedAt).toBeUndefined();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it("anchors model uptime to the browser clock on receipt", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-26T12:00:00Z"));

@@ -138,9 +138,12 @@ export function handleAPIEventMessage(data: string): void {
 
     case "modelStatus": {
       const receivedAt = Date.now();
-      const newModels = (JSON.parse(message.data) as Model[]).map((m) =>
-        m.uptimeMs !== undefined ? { ...m, readyAt: receivedAt - m.uptimeMs } : m,
-      );
+      const newModels = (JSON.parse(message.data) as Model[]).map((m) => ({
+        ...m,
+        readyAt: m.uptimeMs !== undefined ? receivedAt - m.uptimeMs : undefined,
+        loadingStartedAt: m.state === "starting" && m.loadingElapsedMs !== undefined
+          ? receivedAt - m.loadingElapsedMs : undefined,
+      }));
       models.set(sortModels(newModels));
 
       break;

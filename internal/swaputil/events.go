@@ -18,6 +18,8 @@ type ProcessStateChangeEvent struct {
 	ProcessName string
 	OldState    string
 	NewState    string
+	// StartupDuration is set only for a successful starting -> ready transition.
+	StartupDuration time.Duration
 }
 
 func (e ProcessStateChangeEvent) Type() uint32 {

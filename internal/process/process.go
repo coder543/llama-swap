@@ -24,6 +24,9 @@ const (
 // ready. All fields are read at once, so they never disagree.
 type Status struct {
 	State ProcessState
+	// StartingSince is the start of this load attempt, excluding queue time.
+	// It is zero unless State is StateStarting.
+	StartingSince time.Time
 	// ReadySince is when the process last entered StateReady. It is the zero
 	// time unless State is StateReady.
 	ReadySince time.Time

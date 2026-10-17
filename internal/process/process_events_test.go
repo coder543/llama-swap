@@ -59,6 +59,13 @@ func TestProcessCommand_EmitsStateChangeEvents(t *testing.T) {
 		if e.OldState == e.NewState {
 			t.Errorf("emitted no-op transition: %s -> %s", e.OldState, e.NewState)
 		}
+		if e.OldState == string(StateStarting) && e.NewState == string(StateReady) {
+			if e.StartupDuration <= 0 {
+				t.Error("successful start has no measured duration")
+			}
+		} else if e.StartupDuration != 0 {
+			t.Errorf("non-successful-start event has duration %v", e.StartupDuration)
+		}
 	}
 
 	want := []string{
