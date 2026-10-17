@@ -60,6 +60,9 @@ type Server struct {
 	// would otherwise leave the retired Server probing alongside the new one.
 	capcompatCancel context.CancelFunc
 
+	startup       *startupTimings
+	startupCancel context.CancelFunc
+
 	// tools is the MCP tool surface served at /api/mcp. Providers are
 	// aggregated here rather than enumerated in the handler, so a future
 	// provider that proxies an upstream MCP endpoint plugs in without
@@ -253,6 +256,10 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 	}
 	s.capcompat = capcompat.New(st.Cache(), logs.ProxyLogs)
 	s.capcompatCancel = event.On(s.onProcessStateChange)
+	s.startup = newStartupTimings(shutdownCtx, cfg.Models, st.Cache(), logs.ProxyLogs)
+	s.startupCancel = event.On(func(e swaputil.ProcessStateChangeEvent) {
+		s.startup.record(shutdownCtx, e)
+	})
 
 	// SysProvider is constructed here because this is where perf and hardware
 	// are in scope; wiring those in later is a change to internal/mcptools.
@@ -594,6 +601,9 @@ func (s *Server) Shutdown(timeout time.Duration) error {
 	s.shutdownFn()
 	if s.capcompatCancel != nil {
 		s.capcompatCancel()
+	}
+	if s.startupCancel != nil {
+		s.startupCancel()
 	}
 
 	var wg sync.WaitGroup

@@ -10,7 +10,7 @@
     selectorModels,
     unloadAllModels,
   } from "../stores/api";
-  import { loadingMessage, loadingPercent, statusDotColor } from "../stores/modelLoad";
+  import { isEstimatedLoading, loadingMessage, loadingNow, loadingPercent, statusDotColor } from "../stores/modelLoad";
   import { showUnlistedModels as showUnlisted, showCapabilityTags } from "../stores/modelDisplay";
   import { listCapabilityBadges, capabilityBadgeClass } from "../lib/capabilities";
   import type { Model } from "../lib/types";
@@ -59,8 +59,9 @@
 </script>
 
 {#snippet modelRow(model: Model)}
-  {@const percent = loadingPercent(model)}
-  {@const message = loadingMessage(model)}
+  {@const percent = loadingPercent(model, $loadingNow)}
+  {@const message = loadingMessage(model, $loadingNow)}
+  {@const estimated = isEstimatedLoading(model)}
   <div class="hover:bg-muted/50 relative flex items-center gap-3 px-4 py-2.5">
     {#if !model.peerID}
       <span class={`size-2.5 shrink-0 rounded-full ${statusDotColor(model)}`}></span>
@@ -92,7 +93,7 @@
       {/if}
     {/if}
     <span class="text-muted-foreground text-xs uppercase tracking-wide">
-      {model.state}{#if percent !== undefined}&nbsp;<span class="tabular-nums">{percent}%</span>{/if}
+      {model.state}{#if percent !== undefined}&nbsp;<span class="tabular-nums" title={estimated ? "Estimated from recent successful starts" : undefined}>{estimated ? "~" : ""}{percent}%</span>{/if}
     </span>
     {#if model.unlisted}
       <Tag class="px-1.5 text-[0.625rem] uppercase">unlisted</Tag>

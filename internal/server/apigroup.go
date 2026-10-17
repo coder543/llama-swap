@@ -44,6 +44,10 @@ type apiModel struct {
 	// LoadingMessage is the loading step the upstream last reported. Only set
 	// while the model is starting.
 	LoadingMessage string `json:"loadingMessage,omitempty"`
+	// Durations rather than server timestamps let the UI handle clock skew
+	// and reconnect in the middle of an ongoing load.
+	LoadingElapsedMs int64 `json:"loadingElapsedMs,omitempty"`
+	EstimatedLoadMs  int64 `json:"estimatedLoadMs,omitempty"`
 }
 
 type apiProfile struct {
@@ -128,6 +132,7 @@ func (s *Server) modelStatus() []apiModel {
 		var readySince string
 		var uptimeMs int64
 		var loading process.LoadingProgress
+		var loadingElapsedMs int64
 		if st, ok := running[id]; ok {
 			state = string(st.State)
 			if st.State == process.StateReady && !st.ReadySince.IsZero() {
@@ -138,6 +143,9 @@ func (s *Server) modelStatus() []apiModel {
 			if st.State == process.StateStarting && st.Loading != nil {
 				loading = *st.Loading
 			}
+			if st.State == process.StateStarting && !st.StartingSince.IsZero() {
+				loadingElapsedMs = max(1, time.Since(st.StartingSince).Milliseconds())
+			}
 		}
 		// Same resolution /v1/models uses, so the dashboard and the OpenAI
 		// listing never disagree about what a model can do. Bound by
@@ -146,18 +154,20 @@ func (s *Server) modelStatus() []apiModel {
 		caps := s.resolveCapabilities(s.shutdownCtx, id, mc)
 		_, capsMap, _, ctxLen := renderCapabilities(caps)
 		models = append(models, apiModel{
-			Id:              id,
-			Name:            mc.Name,
-			Description:     mc.Description,
-			State:           state,
-			Unlisted:        mc.Unlisted,
-			Aliases:         mc.Aliases,
-			Capabilities:    capsMap,
-			ContextLength:   ctxLen,
-			ReadySince:      readySince,
-			UptimeMs:        uptimeMs,
-			LoadingProgress: loading.Progress,
-			LoadingMessage:  loading.Message,
+			Id:               id,
+			Name:             mc.Name,
+			Description:      mc.Description,
+			State:            state,
+			Unlisted:         mc.Unlisted,
+			Aliases:          mc.Aliases,
+			Capabilities:     capsMap,
+			ContextLength:    ctxLen,
+			ReadySince:       readySince,
+			UptimeMs:         uptimeMs,
+			LoadingProgress:  loading.Progress,
+			LoadingMessage:   loading.Message,
+			LoadingElapsedMs: loadingElapsedMs,
+			EstimatedLoadMs:  s.startup.estimate(id),
 		})
 	}
 

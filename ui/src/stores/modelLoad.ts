@@ -1,5 +1,5 @@
-import { writable } from "svelte/store";
-import { loadModel, unloadSingleModel } from "./api";
+import { derived, writable } from "svelte/store";
+import { loadModel, models, unloadSingleModel } from "./api";
 import type { Model } from "../lib/types";
 
 export const pendingLoads = writable<Record<string, boolean>>({});
@@ -45,17 +45,42 @@ export function onToggleLoad(m: Model): void {
   }
 }
 
-// loadingPercent is the reported loading progress as a whole percentage, or
-// undefined when the model is not starting or its upstream reports none. It
-// rounds down so a load that is not finished never shows 100%.
-export function loadingPercent(m: Model | undefined): number | undefined {
-  if (m?.state !== "starting" || m.loadingProgress === undefined) return undefined;
-  return Math.floor(Math.min(Math.max(m.loadingProgress, 0), 1) * 100);
+// Tick only while a subscribed view has an estimated startup to animate.
+export const loadingNow = derived(models, ($models, set) => {
+  set(Date.now());
+  if (!$models.some(isEstimatedLoading)) return;
+  const timer = setInterval(() => set(Date.now()), 200);
+  return () => clearInterval(timer);
+}, Date.now());
+
+export function isEstimatedLoading(m: Model | undefined): boolean {
+  return m?.state === "starting"
+    && !Number.isFinite(m.loadingProgress)
+    && Number.isFinite(m.estimatedLoadMs) && (m.estimatedLoadMs ?? 0) > 0
+    && Number.isFinite(m.loadingStartedAt);
 }
 
-// loadingMessage is the upstream's reported loading step while starting.
-export function loadingMessage(m: Model | undefined): string {
-  return m?.state === "starting" ? (m.loadingMessage ?? "") : "";
+// Prefer upstream progress; otherwise estimate from recent successful starts.
+// Readiness still comes from the health check, so a running bar stops at 99%.
+export function loadingPercent(m: Model | undefined, now = Date.now()): number | undefined {
+  if (m?.state !== "starting") return undefined;
+  if (m.loadingProgress !== undefined && Number.isFinite(m.loadingProgress)) {
+    return Math.min(99, Math.floor(Math.max(m.loadingProgress, 0) * 100));
+  }
+  if (!isEstimatedLoading(m)) return undefined;
+  const fraction = Math.max(0, now - m.loadingStartedAt!) / m.estimatedLoadMs!;
+  return Math.min(99, Math.floor(fraction * 100));
+}
+
+export function loadingMessage(m: Model | undefined, now = Date.now()): string {
+  if (m?.state !== "starting") return "";
+  if (m.loadingMessage) return m.loadingMessage;
+  if (!isEstimatedLoading(m)) return "";
+  const total = Math.ceil(m.estimatedLoadMs! / 1000);
+  const remaining = Math.ceil((m.estimatedLoadMs! - Math.max(0, now - m.loadingStartedAt!)) / 1000);
+  return remaining > 0
+    ? `Estimated startup: ~${total}s · about ${remaining}s remaining`
+    : `Taking longer than the ~${total}s startup estimate`;
 }
 
 export function statusDotColor(m: Model | undefined): string {

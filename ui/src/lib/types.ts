@@ -44,6 +44,11 @@ export interface Model {
   loadingProgress?: number;
   // the loading step the upstream last reported; only set while starting
   loadingMessage?: string;
+  // Successful startup average and elapsed time reported by llama-swap.
+  estimatedLoadMs?: number;
+  loadingElapsedMs?: number;
+  // client-only anchor derived from loadingElapsedMs on status receipt
+  loadingStartedAt?: number;
   // selector-only fields from the v1/models llamaswap metadata
   strategy?: string;
   targets?: string[];

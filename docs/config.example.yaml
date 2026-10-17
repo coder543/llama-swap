@@ -51,10 +51,12 @@ logTimeFormat: ""
 #   keep printing them to stdout.
 logToStdout: "proxy"
 
-# store: persistent storage for activity metrics state
+# store: persistent storage for activity, discovered capabilities and startup timing
 # - optional, default: in-memory sqlite database capped by metricsMaxInMemory
 # - path is a sqlite database file path
 # - file-backed sqlite keeps activity logs across restarts
+# - also preserves the last three successful startup times per model, used
+#   for estimated loading progress when the backend reports no progress
 # store:
 #   path: /path/to/file.sqlite
 
