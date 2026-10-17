@@ -38,6 +38,7 @@
   let localModels = $derived(visibleModels.filter((model) => !model.peerID));
   let activeModels = $derived(activeLocalModels($models));
   let peerModels = $derived(visibleModels.filter((model) => model.peerID));
+  let unlistedCount = $derived($models.filter((model) => model.unlisted).length);
   let selectedProfile = $derived(
     $profiles.find((profile) => profile.id === $activeProfile)
   );
@@ -166,7 +167,7 @@
     onCheckedChange={(v) => showUnlisted.set(v)}
   />
   <span class="text-muted-foreground text-xs">
-    {$models.filter((m) => m.unlisted).length} unlisted
+    {unlistedCount} unlisted
   </span>
 {/snippet}
 
@@ -317,7 +318,7 @@
       </Card.Root>
     {/if}
 
-    {@render modelSection("Local models", localModels, unlistedToggle)}
+    {@render modelSection("Local models", localModels, unlistedCount > 0 ? unlistedToggle : undefined)}
     {@render modelSection("Peer models", peerModels)}
   </div>
 </div>
