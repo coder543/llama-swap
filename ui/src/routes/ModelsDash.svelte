@@ -78,11 +78,10 @@
       use:link
       class="min-w-0 flex-1"
     >
-      <div class="truncate text-sm font-medium">{model.name || model.id}</div>
-      <div class="text-muted-foreground truncate text-xs">
-        {model.id}
-        {#if model.aliases && model.aliases.length > 0}
-          · {model.aliases.join(", ")}
+      <div class="truncate text-sm font-medium">
+        {model.name || model.id}
+        {#if model.name && model.name !== model.id}
+          <span class="text-muted-foreground text-xs font-normal">· {model.id}</span>
         {/if}
       </div>
       {#if message}
