@@ -196,7 +196,7 @@
     <Card.Content class="p-0">
       {#if $capacityTotal > 0}
         <div class="border-b px-4 py-3">
-          <CapacityUsage showKey={false} />
+          <CapacityUsage showFooter={false} />
         </div>
       {/if}
       {#if activeModels.length > 0}

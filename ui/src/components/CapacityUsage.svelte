@@ -5,7 +5,7 @@
   import { Popover } from "bits-ui";
   import { Info } from "@lucide/svelte";
 
-  let { showKey = true }: { showKey?: boolean } = $props();
+  let { showFooter = true }: { showFooter?: boolean } = $props();
   let usage = $derived(capacityUsage($models, $capacityTotal));
 </script>
 
@@ -55,23 +55,25 @@
         <div aria-hidden="true" class="pointer-events-none absolute inset-y-0 border-l-2 border-dashed border-foreground" style:left="{usage.budgetPercent}%"></div>
       {/if}
     </div>
-    <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5 text-xs">
-      {#if showKey && usage.segments.length > 0}
-        <div class="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5">
-          {#each usage.segments as segment (segment.model.id)}
-            <a href="/models/{encodeURIComponent(segment.model.id)}" use:link class="flex min-w-0 items-center gap-1.5 hover:underline">
-              <span aria-hidden="true" class="size-2.5 shrink-0 rounded-sm" style:background-color={segment.color}></span>
-              <span class="break-all">{segment.model.name || segment.model.id}</span>
-              <span class="text-muted-foreground shrink-0 tabular-nums">{formatReservation(segment.memory)}</span>
-            </a>
-          {/each}
-        </div>
-      {/if}
-      {#if usage.overage > 0}
-        <span class="text-warning ml-auto shrink-0 font-medium tabular-nums">{formatReservation(usage.overage)} over capacity</span>
-      {:else}
-        <span class="text-muted-foreground ml-auto shrink-0 tabular-nums">{formatReservation(usage.available)} available</span>
-      {/if}
-    </div>
+    {#if showFooter}
+      <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5 text-xs">
+        {#if usage.segments.length > 0}
+          <div class="flex min-w-0 flex-wrap gap-x-4 gap-y-1.5">
+            {#each usage.segments as segment (segment.model.id)}
+              <a href="/models/{encodeURIComponent(segment.model.id)}" use:link class="flex min-w-0 items-center gap-1.5 hover:underline">
+                <span aria-hidden="true" class="size-2.5 shrink-0 rounded-sm" style:background-color={segment.color}></span>
+                <span class="break-all">{segment.model.name || segment.model.id}</span>
+                <span class="text-muted-foreground shrink-0 tabular-nums">{formatReservation(segment.memory)}</span>
+              </a>
+            {/each}
+          </div>
+        {/if}
+        {#if usage.overage > 0}
+          <span class="text-warning ml-auto shrink-0 font-medium tabular-nums">{formatReservation(usage.overage)} over capacity</span>
+        {:else}
+          <span class="text-muted-foreground ml-auto shrink-0 tabular-nums">{formatReservation(usage.available)} available</span>
+        {/if}
+      </div>
+    {/if}
   </section>
 {/if}
