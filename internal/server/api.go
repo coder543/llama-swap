@@ -404,10 +404,17 @@ func (s *Server) startPreload() {
 			if err != nil {
 				continue
 			}
+			turn := s.requestOrder.register()
+			req = req.WithContext(swaputil.WithRequestTurn(req.Context(), turn))
 			req = req.WithContext(swaputil.SetContext(req.Context(), swaputil.ReqContextData{Model: modelID, ModelID: modelID, Metadata: make(map[string]string)}))
+			if !turn.Wait(req.Context()) {
+				turn.Release()
+				return
+			}
 
 			dw := &discardResponseWriter{status: http.StatusOK}
 			s.local.ServeHTTP(dw, req)
+			turn.Release()
 
 			success := dw.status < http.StatusBadRequest
 			if !success {
@@ -529,6 +536,7 @@ func (s *Server) handleUpstream(w http.ResponseWriter, r *http.Request) {
 	case s.local.Handles(modelID):
 		s.local.ServeHTTP(w, r)
 	case s.peer.Handles(modelID):
+		swaputil.ReleaseRequestTurn(r.Context())
 		s.peer.ServeHTTP(w, r)
 	default:
 		swaputil.SendResponse(w, r, http.StatusNotFound, "no router for model "+modelID)

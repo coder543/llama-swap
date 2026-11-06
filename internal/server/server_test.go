@@ -30,6 +30,7 @@ type stubRouter struct {
 	models        map[string]bool
 	response      string
 	serveHTTP     func(http.ResponseWriter, *http.Request)
+	admitHTTP     func(*http.Request)
 	shutdownCalls atomic.Int32
 	running       map[string]process.ProcessState
 	readySince    map[string]time.Time
@@ -52,6 +53,10 @@ func newStubRouter(models []string, response string) *stubRouter {
 func (s *stubRouter) Handles(model string) bool      { return s.models[model] }
 func (s *stubRouter) Shutdown(_ time.Duration) error { s.shutdownCalls.Add(1); return nil }
 func (s *stubRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.admitHTTP != nil {
+		s.admitHTTP(r)
+	}
+	swaputil.ReleaseRequestTurn(r.Context())
 	if s.serveHTTP != nil {
 		s.serveHTTP(w, r)
 		return
@@ -298,12 +303,16 @@ func TestServer_GlobalConcurrencyLimit(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects requests beyond the configured limit with 429", func(t *testing.T) {
+	t.Run("queues requests beyond the configured limit", func(t *testing.T) {
 		release := make(chan struct{})
 		started := make(chan struct{})
 		blocking := newStubRouter([]string{"local-model"}, "")
 		blocking.serveHTTP = func(w http.ResponseWriter, r *http.Request) {
-			close(started)
+			select {
+			case <-started:
+			default:
+				close(started)
+			}
 			<-release
 			w.WriteHeader(http.StatusOK)
 		}
@@ -324,13 +333,14 @@ func TestServer_GlobalConcurrencyLimit(t *testing.T) {
 		<-started
 
 		w := httptest.NewRecorder()
-		s.ServeHTTP(w, chatRequest("local-model"))
-		if w.Code != http.StatusTooManyRequests {
-			t.Fatalf("status=%d body=%q want 429", w.Code, w.Body.String())
-		}
-
+		secondDone := make(chan struct{})
+		go func() { s.ServeHTTP(w, chatRequest("local-model")); close(secondDone) }()
 		close(release)
 		<-done
+		<-secondDone
+		if w.Code != http.StatusOK {
+			t.Fatalf("status=%d body=%q want 200", w.Code, w.Body.String())
+		}
 	})
 }
 

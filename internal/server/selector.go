@@ -108,6 +108,11 @@ func CreateSelectorMiddleware(s *Server) chain.Middleware {
 				next.ServeHTTP(w, r)
 				return
 			}
+			// Choosing a target observes and reserves shared state, so it must
+			// happen in arrival order as well as the eventual dispatch.
+			if !swaputil.WaitRequestTurn(r.Context()) {
+				return
+			}
 
 			var target string
 			switch selector.Strategy {
@@ -200,8 +205,10 @@ func strategySpillover(selectorID string, tracker *selectorSpilloverTracker, run
 
 		processState, runningNow := running[target.modelID]
 		switch {
-		case processState == process.StateStopping || processState == process.StateShutdown:
+		case processState == process.StateShutdown:
 			continue
+		case processState == process.StateStopping:
+			cold = append(cold, target)
 		case processState == process.StateReady || processState == process.StateStarting:
 			active = append(active, target)
 		case state.inflight[target.modelID] > 0:

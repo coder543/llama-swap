@@ -480,6 +480,7 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	// immediately after this readiness check; dropping that websocket is the
 	// intended tradeoff of opting out of lifecycle tracking.
 	if swaputil.ShouldIgnoreWebsocket(req, b.config) {
+		swaputil.ReleaseRequestTurn(req.Context())
 		p, ok := b.processes[data.ModelID]
 		if !ok {
 			swaputil.SendError(w, req, scheduler.ErrModelNotFound)
@@ -507,6 +508,7 @@ func (b *baseRouter) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	select {
 	case b.handlerCh <- hr:
+		swaputil.ReleaseRequestTurn(req.Context())
 	case <-req.Context().Done():
 		return
 	case <-b.shutdownCtx.Done():

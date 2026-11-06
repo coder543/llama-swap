@@ -3,13 +3,11 @@ package scheduler
 import (
 	"fmt"
 	"sort"
-	"strconv"
 	"time"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
-	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
 
 // defaultConcurrencyLimit caps simultaneous in-flight requests per model when
@@ -23,20 +21,12 @@ type activeSwap struct {
 	waiters []HandlerReq
 }
 
-// FIFO is the default scheduler. Requests are handled in a first-in, first-out order.
-// To reduce swapping requests for a model that is already running will be handled
-// immediately by the running process.
-//
-// Requests into this schedule are handled like this:
-//
-// A B C A B C --> A A B B C C
-//
-// The strategy is simple and reduces the number of swaps required.
+// FIFO serves requests in arrival order, allowing consecutive requests to run
+// concurrently when their models and concurrency limits permit it.
 type FIFO struct {
 	name    string
 	logger  *logmon.Monitor
 	planner Swapper
-	cfg     config.FifoConfig
 	effects Effects
 
 	limits   map[string]int
@@ -52,7 +42,7 @@ type FIFO struct {
 // NewFIFO builds a FIFO scheduler. Per-model concurrency limits are derived
 // from models: each model's ConcurrencyLimit overrides defaultConcurrencyLimit
 // when set to a value greater than zero.
-func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.FifoConfig, models map[string]config.ModelConfig, eff Effects) *FIFO {
+func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, _ config.FifoConfig, models map[string]config.ModelConfig, eff Effects) *FIFO {
 	limits := make(map[string]int, len(models))
 	for id, mc := range models {
 		limit := defaultConcurrencyLimit
@@ -66,7 +56,6 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 		name:        name,
 		logger:      logger,
 		planner:     planner,
-		cfg:         cfg,
 		effects:     eff,
 		limits:      limits,
 		active:      make(map[string]*activeSwap),
@@ -84,7 +73,9 @@ func NewFIFO(name string, logger *logmon.Monitor, planner Swapper, cfg config.Fi
 // The decision tree, in order:
 //
 //  1. Unknown model — respond with ErrModelNotFound and move on.
-//  2. A swap to the same model is already in flight — attach this waiter so
+//  2. If earlier work is queued or this model's concurrency limit is full,
+//     append to the queue.
+//  3. A swap to the same model is already in flight — attach this waiter so
 //     one swap serves all callers that asked for the same model.
 //  3. Fast path — the target process is already ready, the planner sees
 //     nothing to evict, and no in-flight swap is evicting it. Hand back its
@@ -107,6 +98,12 @@ func (s *FIFO) OnRequest(req HandlerReq) {
 	}
 
 	if !s.admit(req) {
+		return
+	}
+	// Once a request is waiting, later requests cannot bypass it, even if
+	// their model is already running or is currently loading.
+	if len(s.queued) > 0 || s.slotsUsed(req.Model) >= s.limit(req.Model) {
+		s.enqueue(req)
 		return
 	}
 
@@ -195,6 +192,7 @@ func (s *FIFO) OnCancel(req HandlerReq) {
 	if removed {
 		s.logger.Debugf("%s: cancelled request for model %s pruned from scheduler", s.name, req.Model)
 		broadcastQueuePositions(s.queued)
+		s.drainQueue()
 	}
 }
 
@@ -220,16 +218,16 @@ func (s *FIFO) OnSwapDone(ev SwapDone) {
 	s.drainQueue()
 }
 
-// OnServeDone decrements the per-model in-flight count and, when that drops to
-// zero, retries the queue: requests whose swap was deferred because they would
-// have evicted this (now-idle) process can now proceed.
+// OnServeDone decrements the per-model in-flight count and retries the queue,
+// allowing a waiting request to use a newly freed slot or an idle model to be
+// evicted.
 func (s *FIFO) OnServeDone(ev ServeDoneEvent) {
 	s.inFlight[ev.ModelID]--
 	s.release(ev.ModelID)
 	if s.inFlight[ev.ModelID] <= 0 {
 		delete(s.inFlight, ev.ModelID)
-		s.drainQueue()
 	}
+	s.drainQueue()
 }
 
 // OnUnload reconciles router-owned state with the impending Stop, performs the
@@ -297,13 +295,7 @@ func (s *FIFO) OnShutdown(err error) {
 // grantHandler hands the caller a tracked handler for modelID and, only if the
 // caller was still there to receive it, bumps the in-flight count. Incrementing
 // when the grant failed would strand the counter and block future evictions.
-// Concurrency-limit rejection happens earlier in admit, before a request can
-// start the loading stream.
 func (s *FIFO) grantHandler(req HandlerReq, modelID string) {
-	if err := swaputil.SetReqData(req.Ctx, "fifo_priority", strconv.Itoa(s.cfg.Priority[req.Model])); err != nil {
-		s.logger.Debugf("failed to set fifo_priority metadata: %v", err)
-	}
-
 	if s.effects.GrantServe(req, modelID) {
 		s.inFlight[modelID]++
 		s.useCounter++
@@ -320,19 +312,22 @@ func (s *FIFO) grantError(req HandlerReq, err error) {
 	s.effects.GrantError(req, err)
 }
 
-// admit performs the pre-stream admission handshake. Accepted requests reserve
-// one future serving slot until they serve, cancel while waiting, or receive a
-// post-admission error.
+// admit acknowledges that the scheduler accepted the request. Reservations
+// track all accepted work until it completes, is cancelled, or fails.
 func (s *FIFO) admit(req HandlerReq) bool {
-	if s.reserved[req.Model] >= s.limit(req.Model) {
-		s.rejectAdmission(req, swaputil.ConcurrencyLimitError{})
-		return false
-	}
 	if !sendAdmission(req, nil) {
 		return false
 	}
 	s.reserved[req.Model]++
 	return true
+}
+
+func (s *FIFO) slotsUsed(modelID string) int {
+	n := s.inFlight[modelID]
+	if sw := s.active[modelID]; sw != nil {
+		n += len(sw.waiters)
+	}
+	return n
 }
 
 func (s *FIFO) rejectAdmission(req HandlerReq, err error) {
@@ -396,23 +391,10 @@ func (s *FIFO) startSwap(initial HandlerReq, evict []string, state PlanningState
 	s.effects.StartSwap(initial.Model, evict)
 }
 
-// enqueue inserts req into the queue in priority order: it goes just before the
-// first queued item whose priority is strictly lower, so higher-priority models
-// are serviced first while equal-priority requests keep their arrival (FIFO)
-// order. Priorities come from the FifoConfig; unlisted models default to 0.
+// enqueue appends to the end of the arrival-ordered queue.
 func (s *FIFO) enqueue(req HandlerReq) {
-	p := s.cfg.Priority[req.Model]
-	i := len(s.queued)
-	for j, q := range s.queued {
-		if s.cfg.Priority[q.Model] < p {
-			i = j
-			break
-		}
-	}
-	s.queued = append(s.queued, HandlerReq{})
-	copy(s.queued[i+1:], s.queued[i:])
-	s.queued[i] = req
-	broadcastQueuePositions(s.queued)
+	s.queued = append(s.queued, req)
+	sendQueuePosition(req, len(s.queued))
 }
 
 // drainQueue walks the queued requests in order, re-running the OnRequest
@@ -425,7 +407,15 @@ func (s *FIFO) drainQueue() {
 	}
 	pending := s.queued
 	var remaining []HandlerReq
-	for _, req := range pending {
+	for i, req := range pending {
+		if reqDone(req) != nil && req.Ctx.Err() != nil {
+			s.release(req.Model)
+			continue
+		}
+		if s.slotsUsed(req.Model) >= s.limit(req.Model) {
+			remaining = append(remaining, pending[i:]...)
+			break
+		}
 		state, ok := s.effects.ModelState(req.Model)
 		if !ok {
 			s.grantError(req, ErrModelNotFound)
@@ -445,16 +435,16 @@ func (s *FIFO) drainQueue() {
 			continue
 		}
 		if decision.Blocked {
-			remaining = append(remaining, req)
-			continue
+			remaining = append(remaining, pending[i:]...)
+			break
 		}
 		if collidesWith(req.Model, evict, s.active) {
-			remaining = append(remaining, req)
-			continue
+			remaining = append(remaining, pending[i:]...)
+			break
 		}
 		if conflictsWithInFlight(evict, s.inFlight) {
-			remaining = append(remaining, req)
-			continue
+			remaining = append(remaining, pending[i:]...)
+			break
 		}
 		s.logger.Debugf("%s: queued request for model %s now starting swap, evicting %v", s.name, req.Model, evict)
 		s.startSwap(req, evict, planning)
@@ -577,18 +567,21 @@ func containsString(xs []string, s string) bool {
 // drained first so the consumer always sees the latest position.
 func broadcastQueuePositions(queued []HandlerReq) {
 	for i, req := range queued {
-		pos := i + 1
+		sendQueuePosition(req, i+1)
+	}
+}
+
+func sendQueuePosition(req HandlerReq, pos int) {
+	select {
+	case req.PositionCh <- pos:
+	default:
+		select {
+		case <-req.PositionCh:
+		default:
+		}
 		select {
 		case req.PositionCh <- pos:
 		default:
-			select {
-			case <-req.PositionCh:
-			default:
-			}
-			select {
-			case req.PositionCh <- pos:
-			default:
-			}
 		}
 	}
 }

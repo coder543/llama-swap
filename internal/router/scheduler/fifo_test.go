@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"testing"
 	"time"
 
@@ -182,21 +181,6 @@ func assertAdmitted(t *testing.T, req HandlerReq) {
 	}
 }
 
-func assertAdmission429(t *testing.T, req HandlerReq) {
-	t.Helper()
-	var httpErr swaputil.HTTPError
-	err := admitErr(t, req)
-	if !errors.As(err, &httpErr) {
-		t.Fatalf("admission err=%v want HTTPError", err)
-	}
-	if httpErr.StatusCode() != http.StatusTooManyRequests {
-		t.Fatalf("StatusCode()=%d want 429", httpErr.StatusCode())
-	}
-	if httpErr.Header().Get("Retry-After") == "" {
-		t.Fatal("missing Retry-After header")
-	}
-}
-
 func TestFIFO_SendAdmission_CancelledContextWins(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -250,7 +234,7 @@ func TestFIFO_FastPath(t *testing.T) {
 	}
 }
 
-func TestFIFO_GrantSetsPriorityMetadata(t *testing.T) {
+func TestFIFO_GrantOmitsPriorityMetadata(t *testing.T) {
 	eff := newFakeEffects()
 	eff.states["a"] = process.StateReady
 	cfg := config.FifoConfig{Priority: map[string]int{"a": 7}}
@@ -266,8 +250,8 @@ func TestFIFO_GrantSetsPriorityMetadata(t *testing.T) {
 	if !ok {
 		t.Fatal("context data missing from granted request")
 	}
-	if data.Metadata["fifo_priority"] != "7" {
-		t.Errorf("fifo_priority = %q, want 7", data.Metadata["fifo_priority"])
+	if _, exists := data.Metadata["fifo_priority"]; exists {
+		t.Error("strict FIFO must not report an effective priority")
 	}
 }
 
@@ -474,7 +458,7 @@ func TestFIFO_QueueCollation(t *testing.T) {
 		"c": {"a", "b"},
 	}}, eff)
 
-	for _, id := range []string{"a", "b", "c", "a", "b", "c"} {
+	for _, id := range []string{"a", "a", "b", "b", "c", "c"} {
 		s.OnRequest(req(id))
 	}
 
@@ -692,9 +676,9 @@ func TestFIFO_OnUnload_DropsQueuedRequests(t *testing.T) {
 	}
 }
 
-// TestFIFO_PriorityQueueOrder verifies queued requests are ordered by descending
-// priority, with arrival (FIFO) order preserved among equal-priority models.
-func TestFIFO_PriorityQueueOrder(t *testing.T) {
+// TestFIFO_LegacyPriorityIgnored verifies strict arrival order even when the
+// legacy priority setting is present.
+func TestFIFO_LegacyPriorityIgnored(t *testing.T) {
 	eff := newFakeEffects()
 	for _, m := range []string{"z", "A", "B", "C", "D"} {
 		eff.states[m] = process.StateStopped
@@ -716,7 +700,7 @@ func TestFIFO_PriorityQueueOrder(t *testing.T) {
 	for i, q := range s.queued {
 		got[i] = q.Model
 	}
-	want := []string{"A", "B", "C", "D"}
+	want := []string{"B", "D", "C", "A"}
 	if len(got) != len(want) {
 		t.Fatalf("queue=%v want %v", got, want)
 	}
@@ -827,10 +811,79 @@ func newFIFOWithLimit(t *testing.T, model string, limit int) (*FIFO, *fakeEffect
 	return s, eff
 }
 
-// TestFIFO_ConcurrencyLimit_RejectsOverLimit verifies that a request arriving
-// while the model is at capacity gets rejected during admission, before it can
-// be queued or served, and that a new request succeeds once capacity returns.
-func TestFIFO_ConcurrencyLimit_RejectsOverLimit(t *testing.T) {
+func TestFIFO_CompetingModelsPreserveArrivalOrder(t *testing.T) {
+	eff := newFakeEffects()
+	eff.states["tts"] = process.StateReady
+	eff.states["other"] = process.StateStopped
+	planner := &stubPlanner{evict: map[string][]string{"other": {"tts"}}}
+	s := NewFIFO("test", logmon.NewWriter(io.Discard), planner, config.FifoConfig{}, map[string]config.ModelConfig{
+		"tts": {ConcurrencyLimit: 2}, "other": {},
+	}, eff)
+	// Two TTS requests run together. The third waits, then a competing model
+	// and two more TTS requests follow in that exact order.
+	for _, id := range []string{"tts", "tts", "tts", "other", "tts", "tts"} {
+		r := reqCh(id)
+		s.OnRequest(r)
+		assertAdmitted(t, r)
+	}
+	if eff.served("tts") != 2 || len(s.queued) != 4 {
+		t.Fatalf("served=%d queued=%d", eff.served("tts"), len(s.queued))
+	}
+	// One slot frees: the older TTS request runs immediately, but later TTS
+	// requests cannot bypass the competing request.
+	s.OnServeDone(ServeDoneEvent{ModelID: "tts"})
+	if eff.served("tts") != 3 || len(s.queued) != 3 || eff.startsFor("other") != 0 {
+		t.Fatalf("served=%d queued=%d other starts=%d", eff.served("tts"), len(s.queued), eff.startsFor("other"))
+	}
+	s.OnServeDone(ServeDoneEvent{ModelID: "tts"})
+	if eff.startsFor("other") != 0 {
+		t.Fatal("swapped out an active model")
+	}
+	s.OnServeDone(ServeDoneEvent{ModelID: "tts"})
+	if eff.startsFor("other") != 1 {
+		t.Fatal("competing model did not start after TTS drained")
+	}
+	eff.states["tts"] = process.StateStopped
+	eff.states["other"] = process.StateReady
+	planner.evict["tts"] = []string{"other"}
+	s.OnSwapDone(SwapDone{ModelID: "other"})
+	if eff.served("other") != 1 || eff.startsFor("tts") != 0 {
+		t.Fatal("TTS bypassed the competing request")
+	}
+	s.OnServeDone(ServeDoneEvent{ModelID: "other"})
+	if eff.startsFor("tts") != 1 {
+		t.Fatal("TTS did not restart")
+	}
+	eff.states["other"] = process.StateStopped
+	eff.states["tts"] = process.StateReady
+	planner.evict["tts"] = nil
+	s.OnSwapDone(SwapDone{ModelID: "tts"})
+	if eff.served("tts") != 5 || len(s.queued) != 0 {
+		t.Fatalf("served=%d queued=%d", eff.served("tts"), len(s.queued))
+	}
+}
+
+func TestFIFO_CancelHeadUnblocksFollowingRequest(t *testing.T) {
+	s, eff := newFIFOWithLimit(t, "tts", 1)
+	eff.states["other"] = process.StateStopped
+	s.planner = &stubPlanner{blocked: map[string]bool{"other": true}}
+	s.OnRequest(reqCh("tts"))
+	head := reqCh("other")
+	s.OnRequest(head)
+	s.OnRequest(reqCh("tts"))
+	s.OnServeDone(ServeDoneEvent{ModelID: "tts"})
+	if eff.served("tts") != 1 {
+		t.Fatal("later request bypassed blocked head")
+	}
+	s.OnCancel(head)
+	if eff.served("tts") != 2 {
+		t.Fatal("cancelling the head did not drain the queue")
+	}
+}
+
+// TestFIFO_ConcurrencyLimit_QueuesOverLimit verifies that excess requests wait
+// for an available serving slot.
+func TestFIFO_ConcurrencyLimit_QueuesOverLimit(t *testing.T) {
 	s, eff := newFIFOWithLimit(t, "a", 1)
 
 	// First request: served (inFlight 0 → 1).
@@ -841,10 +894,10 @@ func TestFIFO_ConcurrencyLimit_RejectsOverLimit(t *testing.T) {
 		t.Fatalf("served(a)=%d want 1", got)
 	}
 
-	// Second request while slot is occupied: rejected at admission with 429.
+	// Second request waits while the slot is occupied.
 	r2 := req("a")
 	s.OnRequest(r2)
-	assertAdmission429(t, r2)
+	assertAdmitted(t, r2)
 	if got := eff.errored("a"); got != 0 {
 		t.Fatalf("errored(a)=%d want 0 (over-limit rejects before grant)", got)
 	}
@@ -876,10 +929,10 @@ func TestFIFO_ConcurrencyLimit_DefaultIsTen(t *testing.T) {
 		t.Fatalf("served(a)=%d want 10 (default limit)", got)
 	}
 
-	// 11th request is rejected.
+	// The 11th request waits.
 	r := req("a")
 	s.OnRequest(r)
-	assertAdmission429(t, r)
+	assertAdmitted(t, r)
 	if got := eff.errored("a"); got != 0 {
 		t.Fatalf("errored(a)=%d want 0 (over default limit rejects before grant)", got)
 	}
@@ -898,7 +951,7 @@ func TestFIFO_ConcurrencyLimit_CustomLimit(t *testing.T) {
 	s.OnRequest(r3)
 	assertAdmitted(t, r1)
 	assertAdmitted(t, r2)
-	assertAdmission429(t, r3)
+	assertAdmitted(t, r3)
 
 	if got := eff.served("a"); got != 2 {
 		t.Fatalf("served(a)=%d want 2 (custom limit)", got)
@@ -909,8 +962,7 @@ func TestFIFO_ConcurrencyLimit_CustomLimit(t *testing.T) {
 }
 
 // TestFIFO_ConcurrencyLimit_SwapWaiters verifies that when more swap waiters
-// exist than the concurrency limit, excess waiters are rejected during
-// admission rather than after the loading stream has started.
+// exist than the concurrency limit, excess waiters remain queued.
 func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 	eff := newFakeEffects()
 	eff.states["a"] = process.StateStopped
@@ -919,7 +971,7 @@ func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 	}
 	s := NewFIFO("test", logmon.NewWriter(io.Discard), &stubPlanner{}, config.FifoConfig{}, models, eff)
 
-	// Three requests arrive while model is loading: one starts swap, two join.
+	// Three requests arrive while model is loading: two reserve slots and one waits.
 	r1 := req("a")
 	r2 := req("a")
 	r3 := req("a")
@@ -928,7 +980,7 @@ func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 	s.OnRequest(r3)
 	assertAdmitted(t, r1)
 	assertAdmitted(t, r2)
-	assertAdmission429(t, r3)
+	assertAdmitted(t, r3)
 
 	if got := eff.startsFor("a"); got != 1 {
 		t.Fatalf("StartSwap(a)=%d want 1", got)
@@ -937,7 +989,7 @@ func TestFIFO_ConcurrencyLimit_SwapWaiters(t *testing.T) {
 		t.Fatalf("waiters=%d want 2 (third request must not join)", len(sw.waiters))
 	}
 
-	// Swap completes: only the two admitted requests are served.
+	// Swap completes: the first two requests are served.
 	eff.states["a"] = process.StateReady
 	s.OnSwapDone(SwapDone{ModelID: "a"})
 
@@ -967,15 +1019,15 @@ func TestFIFO_ConcurrencyLimit_QueuedWaitersReserveCapacity(t *testing.T) {
 	s.OnRequest(bReq)  // StartSwap(b)
 	s.OnRequest(aReq1) // queued behind b
 	s.OnRequest(aReq2) // queued behind b
-	s.OnRequest(aReq3) // rejected before queueing
+	s.OnRequest(aReq3) // queued behind b
 
 	assertAdmitted(t, bReq)
 	assertAdmitted(t, aReq1)
 	assertAdmitted(t, aReq2)
-	assertAdmission429(t, aReq3)
+	assertAdmitted(t, aReq3)
 
-	if got := len(s.queued); got != 2 {
-		t.Fatalf("queue len=%d want 2", got)
+	if got := len(s.queued); got != 3 {
+		t.Fatalf("queue len=%d want 3", got)
 	}
 	if got := eff.startsFor("a"); got != 0 {
 		t.Fatalf("StartSwap(a)=%d want 0 while b is loading", got)
@@ -1015,13 +1067,13 @@ func TestFIFO_ConcurrencyLimit_CancelledQueuedWaiterReleasesReservation(t *testi
 	s.OnRequest(rejectedReq)
 	assertAdmitted(t, bReq)
 	assertAdmitted(t, cancelledReq)
-	assertAdmission429(t, rejectedReq)
+	assertAdmitted(t, rejectedReq)
 
 	s.OnCancel(cancelledReq)
 	s.OnRequest(retryReq)
 	assertAdmitted(t, retryReq)
 
-	if got := len(s.queued); got != 1 {
-		t.Fatalf("queue len=%d want 1 after cancel and retry", got)
+	if got := len(s.queued); got != 2 {
+		t.Fatalf("queue len=%d want 2 after cancel and retry", got)
 	}
 }

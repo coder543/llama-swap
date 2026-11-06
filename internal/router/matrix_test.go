@@ -11,6 +11,7 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMatrix_CapacityConstructor(t *testing.T) {
@@ -453,6 +454,62 @@ func TestMatrix_CapacityCountsActiveSwapTarget(t *testing.T) {
 	a.markReady()
 	waitSignal(t, aDone, "a request completion")
 	waitSignal(t, bDone, "b request completion")
+}
+
+func TestMatrix_CapacityFIFOCompetingRequests(t *testing.T) {
+	tts := newFakeProcess("tts")
+	tts.markReady()
+	tts.autoReady = true
+	tts.serveBlock = make(chan struct{})
+	tts.stopBlock = make(chan struct{})
+	other := newFakeProcess("other")
+	other.autoReady = true
+	other.serveBlock = make(chan struct{})
+	r := newTestCapacityMatrix(t, 40, "cost", map[string]config.ModelConfig{
+		"tts": {Memory: 30, ConcurrencyLimit: 4}, "other": {Memory: 30},
+	}, map[string]process.Process{"tts": tts, "other": other})
+	start := func(id string) <-chan struct{} {
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, newRequest(id))
+			if w.Code != http.StatusOK {
+				t.Errorf("%s status=%d body=%s", id, w.Code, w.Body.String())
+			}
+		}()
+		waitProcessed(t, r.testProcessed, 1)
+		return done
+	}
+	first := start("tts")
+	waitSignal(t, tts.serveStarted, "first TTS request")
+	second := start("tts")
+	require.Eventually(t, func() bool { return tts.serveCalls.Load() == 2 }, time.Second, time.Millisecond)
+	competing := start("other")
+	later := start("tts")
+	if tts.serveCalls.Load() != 2 || other.runCalls.Load() != 0 {
+		t.Fatal("later request bypassed the competing model")
+	}
+	close(tts.serveBlock)
+	waitSignal(t, first, "first TTS completion")
+	waitSignal(t, second, "second TTS completion")
+	waitSignal(t, tts.stopStarted, "TTS stopping")
+	more := start("tts") // Arrives while eviction is in progress.
+	if tts.stoppedWhileServing.Load() {
+		t.Fatal("TTS was stopped while serving")
+	}
+	close(tts.stopBlock)
+	waitSignal(t, other.serveStarted, "competing request")
+	if tts.serveCalls.Load() != 2 {
+		t.Fatal("TTS served before the competing request completed")
+	}
+	close(other.serveBlock)
+	waitSignal(t, competing, "competing completion")
+	waitSignal(t, later, "queued TTS completion")
+	waitSignal(t, more, "TTS request during eviction completion")
+	if tts.serveCalls.Load() != 4 || tts.runCalls.Load() != 1 {
+		t.Fatalf("TTS serves=%d starts=%d", tts.serveCalls.Load(), tts.runCalls.Load())
+	}
 }
 
 func newTestMatrixSolver(t *testing.T, sets config.OrderedSets, evictCosts map[string]int, modelNames ...string) *matrixSolver {

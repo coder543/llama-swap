@@ -2,7 +2,6 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/logmon"
 	"github.com/mostlygeek/llama-swap/internal/process"
 	"github.com/mostlygeek/llama-swap/internal/router/scheduler"
-	"github.com/mostlygeek/llama-swap/internal/swaputil"
 )
 
 // These tests cover baseRouter's own machinery — the run loop, process
@@ -592,7 +590,7 @@ func TestBaseRouter_ModelNotFound(t *testing.T) {
 	}
 }
 
-func TestBaseRouter_ConcurrencyLimitRejectsBeforeLoadingStream(t *testing.T) {
+func TestBaseRouter_ConcurrencyLimitQueuesDuringLoading(t *testing.T) {
 	sendLoading := true
 	conf := config.Config{
 		HealthCheckTimeout: 5,
@@ -632,29 +630,19 @@ func TestBaseRouter_ConcurrencyLimitRejectsBeforeLoadingStream(t *testing.T) {
 	waitProcessed(t, b.testProcessed, 2)
 
 	w := httptest.NewRecorder()
-	b.ServeHTTP(w, newStreamRequest("a"))
-	if w.Code != http.StatusTooManyRequests {
-		t.Fatalf("status=%d want 429 body=%q", w.Code, w.Body.String())
-	}
-	if got := w.Header().Get("Content-Type"); got != "application/json" {
-		t.Fatalf("Content-Type=%q want application/json", got)
-	}
-	if strings.Contains(w.Body.String(), "llama-swap loading model") {
-		t.Fatalf("429 body contains loading stream: %q", w.Body.String())
-	}
-	// OpenAI clients read body["error"]["message"], so "error" must decode as
-	// an object rather than a bare string.
-	var envelope swaputil.ErrorEnvelope
-	if err := json.Unmarshal(w.Body.Bytes(), &envelope); err != nil {
-		t.Fatalf("429 body is not an OpenAI error envelope: %v, body=%q", err, w.Body.String())
-	}
-	if envelope.Error.Message == "" || envelope.Error.Type != swaputil.ErrorTypeRateLimit {
-		t.Fatalf("429 error=%+v, want a rate_limit_error with a message", envelope.Error)
-	}
+	aDone3 := make(chan struct{})
+	go func() {
+		b.ServeHTTP(w, newStreamRequest("a"))
+		close(aDone3)
+	}()
+	waitProcessed(t, b.testProcessed, 1)
 
 	close(bProc.serveBlock)
-	for name, ch := range map[string]chan struct{}{"b": bDone, "a1": aDone1, "a2": aDone2} {
+	for name, ch := range map[string]chan struct{}{"b": bDone, "a1": aDone1, "a2": aDone2, "a3": aDone3} {
 		waitSignal(t, ch, name+" request finish")
+	}
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d want 200 body=%q", w.Code, w.Body.String())
 	}
 }
 

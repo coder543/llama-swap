@@ -178,20 +178,9 @@ versus a mid-size LLM plus TTS. Groups cannot express that; matrix can.
 
 ## Request ordering
 
-Queued requests are FIFO. You can give some models priority:
-
-```yaml
-routing:
-  scheduler:
-    use: fifo
-    settings:
-      fifo:
-        priority:
-          interactive-model: 10
-          batch-model: 1
-```
-
-Higher numbers are serviced first. Models default to 0.
+Queued requests are served in arrival order. The legacy
+`routing.scheduler.settings.fifo.priority` setting is accepted for
+compatibility but does not change this order.
 
 ## Related
 

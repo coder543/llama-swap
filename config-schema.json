@@ -235,7 +235,7 @@
             "type": "integer",
             "minimum": 0,
             "default": 0,
-            "description": "Caps the number of inference requests served at once across all models combined, using a single shared semaphore rather than a per-model limit. 0 means no limit. Requests exceeding the limit receive an HTTP 429 Too Many Requests response immediately rather than being queued."
+            "description": "Caps inference requests across all models with a shared semaphore. 0 means no limit. Requests wait for an available slot."
         },
         "logLevel": {
             "type": "string",
@@ -595,7 +595,7 @@
                         "type": "integer",
                         "minimum": 0,
                         "default": 0,
-                        "description": "Overrides allowed number of active parallel requests to a model. 0 uses internal default of 10. >0 overrides default. Requests exceeding limit get HTTP 429."
+                        "description": "Limits active parallel requests to a model. 0 uses the default of 10; excess requests wait in the FIFO queue."
                     },
                     "sendLoadingState": {
                         "type": "boolean",
@@ -1020,7 +1020,7 @@
                                     "properties": {
                                         "priority": {
                                             "type": "object",
-                                            "description": "Per-model priority. Keys are model IDs, values are integers (default 0). Higher values are serviced first.",
+                                            "description": "Legacy setting accepted for compatibility; FIFO scheduling ignores priorities.",
                                             "additionalProperties": {
                                                 "type": "integer"
                                             }

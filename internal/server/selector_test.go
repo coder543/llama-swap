@@ -157,13 +157,13 @@ func TestServer_SelectorStrategySpillover(t *testing.T) {
 	assert.Equal(t, "c", target)
 
 	stoppedTracker := newSelectorSpilloverTracker(cfg)
-	_, err = strategySpillover("pool", stoppedTracker, map[string]process.ProcessState{
+	target, err = strategySpillover("pool", stoppedTracker, map[string]process.ProcessState{
 		"a": process.StateStopping,
 		"b": process.StateStopping,
 		"c": process.StateShutdown,
 	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no available spillover targets")
+	require.NoError(t, err)
+	assert.Equal(t, "a", target)
 }
 
 func TestServer_SelectorStrategySpillover_RemoteModels(t *testing.T) {
@@ -339,8 +339,7 @@ func TestServer_SelectorMiddleware_AllSpilloverTargetsStopping(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	s.ServeHTTP(w, chatRequest("balanced"))
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assert.Contains(t, w.Body.String(), "no available spillover targets")
+	assert.Equal(t, http.StatusOK, w.Code)
 }
 
 func TestServer_SelectorMiddleware_UpstreamUnsupported(t *testing.T) {

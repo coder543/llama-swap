@@ -72,8 +72,9 @@ type Server struct {
 	profileMu     sync.RWMutex
 	activeProfile string
 
-	local router.LocalRouter
-	peer  router.Router
+	local        router.LocalRouter
+	peer         router.Router
+	requestOrder *requestOrder
 
 	mux     *http.ServeMux
 	handler http.Handler
@@ -300,6 +301,7 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		s.local.ServeHTTP(w, r)
 	case s.peer.Handles(data.ModelID):
 		s.logs.ProxyLogs.Debugf("dispatch: using peer for model: %s", data.ModelID)
+		swaputil.ReleaseRequestTurn(r.Context())
 		s.peer.ServeHTTP(w, r)
 	default:
 		swaputil.SendError(w, r, router.ErrNoRouterFound)
@@ -345,13 +347,10 @@ func stripAudioAPIPrefix(r *http.Request) {
 func (s *Server) routes() {
 
 	authMW := CreateAuthMiddleware(s.cfg)
-	modelMWs := []chain.Middleware{authMW, createContentTypeMiddleware()}
-	// globalConcurrencyLimit guards the top of the inference chain; a limit of
-	// 0 (the default) means no limit, so the handler is left out of the chain
-	// entirely rather than wrapping every request in a no-op semaphore.
-	if s.cfg.GlobalConcurrencyLimit > 0 {
-		modelMWs = append(modelMWs, CreateConcurrencyLimitMiddleware(s.cfg.GlobalConcurrencyLimit))
-	}
+	s.requestOrder = &requestOrder{}
+	orderMW := createRequestOrderMiddleware(s.requestOrder)
+	modelMWs := []chain.Middleware{orderMW, authMW, createContentTypeMiddleware()}
+	// Parsing happens concurrently; dispatch and any global permit are ordered.
 	modelMWs = append(modelMWs,
 		CreateProfileMiddleware(s),
 		CreateSelectorMiddleware(s),
@@ -366,7 +365,11 @@ func (s *Server) routes() {
 	apiChain := chain.New(authMW)
 
 	mux := http.NewServeMux()
-	dispatch := http.HandlerFunc(s.localPeerHandler)
+	var dispatch http.Handler = http.HandlerFunc(s.localPeerHandler)
+	if s.cfg.GlobalConcurrencyLimit > 0 {
+		dispatch = CreateConcurrencyLimitMiddleware(s.cfg.GlobalConcurrencyLimit)(dispatch)
+	}
+	dispatch = waitRequestTurn(dispatch)
 
 	for _, path := range modelPostJSONRoutes {
 		mux.Handle("POST "+path, modelChain.Then(dispatch))
@@ -420,25 +423,25 @@ func (s *Server) routes() {
 
 	// Upstream passthrough. Meter only the model-dispatched endpoints that can
 	// produce token usage/timings.
-	upstreamChain := apiChain.Append(
+	upstreamChain := chain.New(orderMW, authMW,
 		CreateProfileMiddleware(s),
 		CreateUpstreamInflightMiddleware(s.inflight, s.cfg),
 		CreateFilterMiddleware(s.cfg),
 		CreateMetricsMiddleware(s.metrics, s.cfg),
 	)
 	mux.HandleFunc("GET /upstream", handleUpstreamRedirect)
-	mux.Handle("/upstream/{upstreamPath...}", upstreamChain.ThenFunc(s.handleUpstream))
+	mux.Handle("/upstream/{upstreamPath...}", upstreamChain.Then(waitRequestTurn(http.HandlerFunc(s.handleUpstream))))
 
 	// ComfyUI compatibility passthrough. This uses the fixed comfyui_auto model,
 	// whose compatibility settings are applied while loading config. A GET to
 	// /ws may not start an unloaded model.
 	mux.Handle("/comfyui", apiChain.ThenFunc(handleComfyUIRedirect))
-	mux.Handle("/comfyui/{comfyPath...}", apiChain.ThenFunc(s.handleComfyUI))
+	mux.Handle("/comfyui/{comfyPath...}", chain.New(orderMW, authMW).Then(waitRequestTurn(http.HandlerFunc(s.handleComfyUI))))
 
 	// audio.cpp UI passthrough. This uses the fixed audiocpp_auto model so
 	// requests do not have to name a model.
 	mux.Handle("/audiocpp", apiChain.ThenFunc(handleAudioCppRedirect))
-	mux.Handle("/audiocpp/{audioCppPath...}", apiChain.ThenFunc(s.handleAudioCpp))
+	mux.Handle("/audiocpp/{audioCppPath...}", chain.New(orderMW, authMW).Then(waitRequestTurn(http.HandlerFunc(s.handleAudioCpp))))
 
 	// API group (API-key protected) consumed by the UI.
 	mux.Handle("POST /api/models/unload", apiChain.ThenFunc(s.handleAPIUnloadAll))
@@ -502,6 +505,9 @@ func (s *Server) ServeTailcatHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if inference && r.Method != http.MethodOptions {
+		turn := s.requestOrder.register()
+		defer turn.Release()
+		r = r.WithContext(swaputil.WithRequestTurn(r.Context(), turn))
 		// Normalize first so the model lookup sees the same body format the
 		// model chain will.
 		if bodyErr := prepareModelBody(w, r); bodyErr != nil {

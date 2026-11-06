@@ -84,10 +84,11 @@ globalConcurrencyLimit: 8
 
 The default is `0`, meaning no limit — the semaphore is not even added to the
 request chain, so a default config pays no cost for the feature. Once the
-limit is reached, further requests are rejected immediately with an HTTP 429
-response rather than queued; there is no wait for a slot to free up. Clients
-should treat a 429 as a signal to back off and retry, the same way they handle
-a per-model concurrency limit rejection.
+limit is reached, further requests wait for a slot. Per-model concurrency
+limits likewise queue excess work. Configure clients and intermediate proxies
+with timeouts long enough for queued requests and any model reloads.
+Request bodies can be parsed while waiting; this limit applies to dispatch and
+model service, rather than limiting the resources used to receive uploads.
 
 Use this to protect shared hardware (CPU, disk, network) from being
 overwhelmed by traffic spread across many different models, which a per-model

@@ -130,9 +130,7 @@ unloadTimeout: 10
 # - optional, default: 0 (no limit)
 # - unlike models.*.concurrencyLimit, this is a single semaphore shared by
 #   every model rather than a per-model limit
-# - requests that exceed the limit receive an HTTP 429 Too Many Requests
-#   response immediately, rather than being queued
-# - see issue #1086
+# - requests wait for a slot when the limit is reached
 globalConcurrencyLimit: 0
 
 # macros: a dictionary of string substitutions
@@ -506,7 +504,7 @@ models:
     # - useful for limiting the number of active parallel requests a model can process
     # - must be set per model
     # - any number greater than 0 will override the internal default value of 10
-    # - any requests that exceeds the limit will receive an HTTP 429 Too Many Requests response
+    # - requests wait in the FIFO queue when the limit is reached
     # - recommended to be omitted and the default used
     concurrencyLimit: 0
 
@@ -820,17 +818,7 @@ routing:
   # The default and only valid scheduler is "fifo"
   scheduler:
     use: fifo
-    settings:
-      fifo:
-        # priority: a dictionary of model ID -> priority
-        # - optional, default: empty dictionary
-        # - models default to priority 0
-        # - higher priority requests are serviced first in the queue
-        priority:
-          A: 10
-          B: 5
-          C: 5
-          D: 1
+    # The legacy fifo.priority setting is accepted but no longer changes order.
 
 # peers: a dictionary of remote peers and models they provide
 # - optional, default empty dictionary
