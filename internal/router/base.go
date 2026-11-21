@@ -219,11 +219,8 @@ func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
 }
 
 // trackedServe is the wrapper that closes the loop on in-flight tracking.
-// It runs p.ServeHTTP normally; the only added behaviour is a deferred
-// send on serveDoneCh after the handler returns. That send is what tells
-// the run loop "this model now has one fewer request in flight — go look
-// at the queue again, you may be able to start a swap you previously had
-// to defer."
+// The serveDoneCh notification lets the scheduler admit queued requests or
+// evict the model. Metrics can briefly defer it while using its tokenizer.
 //
 // The select on shutdownCtx.Done() is a release valve: if the router is
 // already shutting down, nobody is reading serveDoneCh, so we drop the
@@ -231,10 +228,12 @@ func (b *baseRouter) StopProcesses(timeout time.Duration, ids []string) {
 func (b *baseRouter) trackedServe(modelID string, p process.Process) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			select {
-			case b.serveDoneCh <- scheduler.ServeDoneEvent{ModelID: modelID}:
-			case <-b.shutdownCtx.Done():
-			}
+			swaputil.ReleaseModelAfterResponse(r.Context(), func() {
+				select {
+				case b.serveDoneCh <- scheduler.ServeDoneEvent{ModelID: modelID}:
+				case <-b.shutdownCtx.Done():
+				}
+			})
 		}()
 		p.ServeHTTP(w, r)
 	}

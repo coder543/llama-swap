@@ -35,6 +35,8 @@ type reasoningUpdate struct {
 	entryID   int
 	target    reasoningTokenizerTarget
 	reasoning string
+	ctx       context.Context
+	finish    func()
 }
 
 // ActivityLogEvent carries a single activity log entry to event subscribers.
@@ -175,10 +177,13 @@ func activitySource(r *http.Request) string {
 	return "ip:" + host
 }
 
-func (mp *metricsMonitor) queueReasoningUpdate(entryID int, target reasoningTokenizerTarget, reasoning string) {
+// queueReasoningUpdate takes ownership of lease. It drops excess work rather
+// than keeping a completed response open waiting for a tokenizer worker.
+func (mp *metricsMonitor) queueReasoningUpdate(entryID int, target reasoningTokenizerTarget, reasoning string, lease *swaputil.ModelResponseLease) {
 	mp.asyncMu.Lock()
 	if mp.asyncClosed {
 		mp.asyncMu.Unlock()
+		lease.Release()
 		return
 	}
 	if !mp.asyncStarted {
@@ -191,9 +196,29 @@ func (mp *metricsMonitor) queueReasoningUpdate(entryID int, target reasoningToke
 	mp.asyncMu.Unlock()
 
 	job := reasoningUpdate{entryID: entryID, target: target, reasoning: reasoning}
+	ctx := mp.asyncCtx
+	if lease != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, reasoningTokenizerTimeout)
+		stop := context.AfterFunc(ctx, lease.Release)
+		job.ctx = ctx
+		job.finish = func() {
+			stop()
+			cancel()
+			lease.Release()
+		}
+	}
 	select {
 	case mp.asyncJobs <- job:
-	case <-mp.asyncCtx.Done():
+	case <-ctx.Done():
+		if job.finish != nil {
+			job.finish()
+		}
+	default:
+		if job.finish != nil {
+			job.finish()
+		}
+		mp.debugf("metrics: reasoning tokenizer queue full for activity %d", entryID)
 	}
 }
 
@@ -202,26 +227,30 @@ func (mp *metricsMonitor) reasoningUpdateWorker() {
 	for {
 		select {
 		case job := <-mp.asyncJobs:
-			mp.updateReasoningTokens(job.entryID, job.target, job.reasoning)
+			mp.updateReasoningTokens(job)
 		case <-mp.asyncCtx.Done():
 			return
 		}
 	}
 }
 
-func (mp *metricsMonitor) updateReasoningTokens(entryID int, target reasoningTokenizerTarget, reasoning string) {
-	ctx, cancel := context.WithTimeout(mp.asyncCtx, reasoningTokenizerTimeout)
-	reasoningTokens, ok := tokenizeReasoning(ctx, mp.httpClient, target, reasoning)
-	cancel()
+func (mp *metricsMonitor) updateReasoningTokens(job reasoningUpdate) {
+	ctx, finish := job.ctx, job.finish
+	if ctx == nil {
+		ctx, finish = context.WithTimeout(mp.asyncCtx, reasoningTokenizerTimeout)
+	}
+	reasoningTokens, ok := tokenizeReasoning(ctx, mp.httpClient, job.target, job.reasoning)
+	finish()
 	if !ok {
+		mp.debugf("metrics: could not tokenize reasoning for activity %d", job.entryID)
 		return
 	}
 
-	ctx, cancel = context.WithTimeout(mp.asyncCtx, 5*time.Second)
-	updated, found, err := mp.store.Activity().UpdateReasoningTokens(ctx, entryID, reasoningTokens)
+	ctx, cancel := context.WithTimeout(mp.asyncCtx, 5*time.Second)
+	updated, found, err := mp.store.Activity().UpdateReasoningTokens(ctx, job.entryID, reasoningTokens)
 	cancel()
 	if err != nil {
-		mp.warnf("failed to persist reasoning token update for activity %d: %v", entryID, err)
+		mp.warnf("failed to persist reasoning token update for activity %d: %v", job.entryID, err)
 		return
 	}
 	if !found {
@@ -238,7 +267,7 @@ func (mp *metricsMonitor) updateReasoningTokens(entryID int, target reasoningTok
 // request only and set ErrorMsg to a description of the failure, so the error
 // can be inspected without storing unreadable raw response bytes. reqBody and
 // reqHeaders are the request data buffered before dispatch.
-func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string, tokenizerTarget reasoningTokenizerTarget) {
+func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *responseBodyCopier, cf captureFields, reqBody []byte, reqHeaders map[string]string, tokenizerTarget reasoningTokenizerTarget, lease *swaputil.ModelResponseLease) (leaseTransferred bool) {
 	tm := ActivityLogEntry{
 		Timestamp:       time.Now(),
 		Model:           modelID,
@@ -263,6 +292,7 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 	}
 
 	queueAndEmit := func() {
+		lease.Release()
 		stored, ok := mp.queueMetrics(tm)
 		if !ok {
 			return
@@ -280,30 +310,31 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		mp.debugf("metrics: client disconnected before response, path=%s", r.URL.Path)
 		tm.ErrorMsg = "client disconnected before response"
 		queueAndEmit()
-		return
+		return false
 	}
 
 	if recorder.Status() != http.StatusOK {
+		lease.Release()
 		mp.logger.Warnf("non-200 response, recording partial metrics: status=%d, path=%s", recorder.Status(), r.URL.Path)
 		decoded, decErr := mp.decodeResponseBody(recorder, r.URL.Path)
 		tm.ErrorMsg = failedErrorMessage(recorder.Status(), decoded, decErr)
 		stored, ok := mp.queueMetrics(tm)
 		if !ok {
-			return
+			return false
 		}
 		tm = stored
 		// Capture the request only; the failure is surfaced via ErrorMsg
 		// rather than storing the (possibly undisplayable) response body.
 		tm.HasCapture = mp.storeCapture(tm.ID, r, recorder, cf&^captureRespBody, reqBody, reqHeaders, nil)
 		mp.emitMetric(tm)
-		return
+		return false
 	}
 
 	body := recorder.body.Bytes()
 	if len(body) == 0 {
 		mp.logger.Warn("metrics: empty body, recording minimal metrics")
 		queueAndEmit()
-		return
+		return false
 	}
 
 	if encoding := recorder.Header().Get("Content-Encoding"); encoding != "" {
@@ -312,7 +343,7 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 			mp.logger.Warnf("metrics: decompression failed: %v, path=%s, recording minimal metrics", err, r.URL.Path)
 			tm.ErrorMsg = fmt.Sprintf("response decompression failed: %v", err)
 			queueAndEmit()
-			return
+			return false
 		}
 		body = decoded
 	}
@@ -345,26 +376,31 @@ func (mp *metricsMonitor) record(modelID string, r *http.Request, recorder *resp
 		mp.logger.Warnf("metrics: invalid JSON in response body path=%s, recording minimal metrics", r.URL.Path)
 	}
 
+	var reasoning string
+	if !reasoningTokensReported && tm.Tokens.GeneratedTokens > 0 && tokenizerTarget.URL != "" {
+		if isStreaming {
+			reasoning = extractStreamingReasoningContent(body)
+		} else {
+			reasoning = extractReasoningContent(body)
+		}
+	}
+	if reasoning == "" {
+		lease.Release()
+	}
+
 	stored, ok := mp.queueMetrics(tm)
 	if !ok {
-		return
+		return false
 	}
 	tm = stored
 	tm.HasCapture = mp.storeCapture(tm.ID, r, recorder, cf, reqBody, reqHeaders, body)
 	mp.emitMetric(tm)
 
-	if reasoningTokensReported || tm.Tokens.GeneratedTokens <= 0 || tokenizerTarget.URL == "" {
-		return
-	}
-	var reasoning string
-	if isStreaming {
-		reasoning = extractStreamingReasoningContent(body)
-	} else {
-		reasoning = extractReasoningContent(body)
-	}
 	if reasoning != "" {
-		mp.queueReasoningUpdate(tm.ID, tokenizerTarget, reasoning)
+		mp.queueReasoningUpdate(tm.ID, tokenizerTarget, reasoning, lease)
+		return true
 	}
+	return false
 }
 
 // storeCapture assembles a ReqRespCapture for id, honoring the captureFields

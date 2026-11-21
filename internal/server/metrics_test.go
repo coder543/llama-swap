@@ -8,7 +8,9 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os/exec"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,7 +18,10 @@ import (
 	"github.com/mostlygeek/llama-swap/internal/chain"
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/logmon"
+	"github.com/mostlygeek/llama-swap/internal/process"
+	"github.com/mostlygeek/llama-swap/internal/router"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
+	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
@@ -336,7 +341,7 @@ func TestServer_RecordMetrics_WrappedResponsesUsage(t *testing.T) {
 	copier.WriteHeader(http.StatusOK)
 	copier.Write([]byte(`{"data":{"response":{"usage":{"input_tokens":120,"output_tokens":45}}}}`))
 
-	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -464,7 +469,7 @@ func TestMetricsMonitor_RecordMetadata(t *testing.T) {
 	copier.WriteHeader(http.StatusOK)
 	copier.Write([]byte(`{"usage":{"prompt_tokens":1,"completion_tokens":2}}`))
 
-	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -491,7 +496,7 @@ func TestMetricsMonitor_RecordClientClosed(t *testing.T) {
 	// Nothing is ever written: this is the cold-load cancellation shape.
 	copier.MarkStatus(swaputil.StatusClientClosedRequest)
 
-	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -604,7 +609,7 @@ func TestMetricsMonitor_RecordFailedRequestCapture(t *testing.T) {
 	copier.Write([]byte(`{"error":{"message":"model unavailable"}}`))
 
 	reqBody := []byte(`{"model":"m","messages":[]}`)
-	mm.record("m", r, copier, captureAll, reqBody, reqHeaders, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, captureAll, reqBody, reqHeaders, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -646,7 +651,7 @@ func TestMetricsMonitor_RecordFailedRequestStatusFallback(t *testing.T) {
 	copier.WriteHeader(http.StatusBadGateway)
 	copier.Write([]byte("<html>upstream down</html>"))
 
-	mm.record("m", r, copier, captureAll, nil, nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, captureAll, nil, nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -666,7 +671,7 @@ func TestMetricsMonitor_RecordFailedRequestCaptureDisabled(t *testing.T) {
 	copier.WriteHeader(http.StatusInternalServerError)
 	copier.Write([]byte(`{"error":"boom"}`))
 
-	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -694,7 +699,7 @@ func TestMetricsMonitor_RecordDecompressionFailureSetsErrorMsg(t *testing.T) {
 	copier.WriteHeader(http.StatusOK)
 	copier.Write([]byte("not-really-gzip"))
 
-	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{})
+	mm.record("m", r, copier, captureAll, []byte("req"), nil, reasoningTokenizerTarget{}, nil)
 
 	entries := metricsEntries(t, mm)
 	if len(entries) != 1 {
@@ -1009,7 +1014,7 @@ func TestMetricsMonitor_ReasoningUpdateWithoutCaptures(t *testing.T) {
 	copier := newBodyCopier(w)
 	copier.Header().Set("Content-Type", "application/json")
 	copier.Write([]byte(`{"choices":[{"message":{"reasoning_content":"think"}}],"usage":{"prompt_tokens":2,"completion_tokens":7}}`))
-	mm.record("m", r, copier, captureAll, nil, nil, reasoningTokenizerTarget{URL: tokenizer.URL})
+	mm.record("m", r, copier, captureAll, nil, nil, reasoningTokenizerTarget{URL: tokenizer.URL}, nil)
 
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -1044,7 +1049,7 @@ func TestMetricsMonitor_AuthoritativeReasoningZeroSkipsTokenizer(t *testing.T) {
 	copier := newBodyCopier(w)
 	copier.Header().Set("Content-Type", "application/json")
 	copier.Write([]byte(`{"choices":[{"message":{"reasoning_content":"should not tokenize"}}],"usage":{"completion_tokens":5,"completion_tokens_details":{"reasoning_tokens":0}}}`))
-	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{URL: tokenizer.URL})
+	mm.record("m", r, copier, 0, nil, nil, reasoningTokenizerTarget{URL: tokenizer.URL}, nil)
 
 	select {
 	case <-called:
@@ -1056,6 +1061,105 @@ func TestMetricsMonitor_AuthoritativeReasoningZeroSkipsTokenizer(t *testing.T) {
 		entries[0].Tokens.ReasoningTokens != 0 || entries[0].Tokens.OutputTokens != 5 {
 		t.Fatalf("entries = %+v", entries)
 	}
+}
+
+func TestServer_ReasoningTokenizationProtectsModelDuringSwap(t *testing.T) {
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("requires sleep to stand in for a managed model process")
+	}
+	streamStarted := make(chan struct{})
+	finishStream := make(chan struct{})
+	tokenizerStarted := make(chan struct{})
+	finishTokenizer := make(chan struct{})
+	finishStreamOnce := sync.OnceFunc(func() { close(finishStream) })
+	finishTokenizerOnce := sync.OnceFunc(func() { close(finishTokenizer) })
+
+	inkling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/chat/completions":
+			w.Header().Set("Content-Type", "text/event-stream")
+			io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"abcd\"}}]}\n\n")
+			w.(http.Flusher).Flush()
+			close(streamStarted)
+			<-finishStream
+			io.WriteString(w, "data: {\"usage\":{\"completion_tokens\":7}}\n\ndata: [DONE]\n\n")
+		case "/tokenize":
+			close(tokenizerStarted)
+			<-finishTokenizer
+			io.WriteString(w, `{"tokens":[1,2,3]}`)
+		default:
+			t.Errorf("unexpected Inkling path %s", r.URL.Path)
+		}
+	}))
+	defer inkling.Close()
+	defer finishStreamOnce()
+	defer finishTokenizerOnce()
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		io.WriteString(w, `{"usage":{"completion_tokens":1}}`)
+	}))
+	defer other.Close()
+
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"inkling": {Cmd: "sleep 60", Proxy: inkling.URL, CheckEndpoint: "none", Memory: 6},
+		"other":   {Cmd: "sleep 60", Proxy: other.URL, CheckEndpoint: "none", Memory: 6},
+	}}
+	cfg.Routing.Router.Settings.Matrix = &config.MatrixConfig{Capacity: 10}
+	local, err := router.NewMatrix(cfg, logmon.NewGroup(io.Discard, true, true, true))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, local.Shutdown(time.Second)) })
+	mm := newTestMetricsMonitor(t, logmon.NewWriter(io.Discard), 10, 0)
+	handler := CreateMetricsMiddleware(mm, cfg)(local)
+	start := func(model string) <-chan *httptest.ResponseRecorder {
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() {
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, chatRequest(model))
+			done <- w
+		}()
+		return done
+	}
+	waitFor := func(ch <-chan struct{}, description string) {
+		t.Helper()
+		select {
+		case <-ch:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for " + description)
+		}
+	}
+
+	firstDone := start("inkling")
+	waitFor(streamStarted, "Inkling stream")
+	secondDone := start("other")
+	finishStreamOnce()
+	waitFor(tokenizerStarted, "Inkling tokenizer")
+	select {
+	case response := <-firstDone:
+		require.Equal(t, http.StatusOK, response.Code)
+		require.Contains(t, response.Body.String(), "[DONE]")
+	case <-time.After(2 * time.Second):
+		t.Fatal("tokenizer held up the completed HTTP response")
+	}
+	require.Equal(t, process.StateReady, local.RunningModels()["inkling"])
+	select {
+	case <-secondDone:
+		t.Fatal("competing request evicted Inkling while tokenization was pending")
+	case <-time.After(30 * time.Millisecond):
+	}
+	finishTokenizerOnce()
+	select {
+	case response := <-secondDone:
+		require.Equal(t, http.StatusOK, response.Code)
+	case <-time.After(2 * time.Second):
+		t.Fatal("competing request did not run after tokenization")
+	}
+	require.Eventually(t, func() bool {
+		for _, entry := range metricsEntries(t, mm) {
+			if entry.Model == "inkling" {
+				return entry.Tokens.ReasoningTokens == 3 && entry.Tokens.OutputTokens == 4
+			}
+		}
+		return false
+	}, 2*time.Second, 5*time.Millisecond)
 }
 
 func TestMetricsMonitor_ReasoningUpdatesAreConcurrencyBounded(t *testing.T) {
@@ -1078,7 +1182,7 @@ func TestMetricsMonitor_ReasoningUpdatesAreConcurrencyBounded(t *testing.T) {
 		if !ok {
 			t.Fatal("queueMetrics failed")
 		}
-		mm.queueReasoningUpdate(entry.ID, target, "think")
+		mm.queueReasoningUpdate(entry.ID, target, "think", nil)
 	}
 	for range maxConcurrentReasoningUpdates {
 		select {
@@ -1116,6 +1220,49 @@ func TestMetricsMonitor_ReasoningUpdatesAreConcurrencyBounded(t *testing.T) {
 	if err := mm.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
+}
+
+func TestMetricsMonitor_ReasoningLeaseReleasedOnQueueFullAndShutdown(t *testing.T) {
+	started := make(chan struct{}, maxConcurrentReasoningUpdates)
+	release := make(chan struct{})
+	tokenizer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		started <- struct{}{}
+		<-release
+		io.WriteString(w, `{"count":1}`)
+	}))
+	defer tokenizer.Close()
+	defer close(release)
+
+	mm := newTestMetricsMonitor(t, nil, 10, 0)
+	mm.asyncJobs = make(chan reasoningUpdate, 1)
+	target := reasoningTokenizerTarget{URL: tokenizer.URL}
+	for id := range maxConcurrentReasoningUpdates {
+		mm.queueReasoningUpdate(id, target, "think", nil)
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("tokenizer worker did not start")
+		}
+	}
+	newLease := func() (*swaputil.ModelResponseLease, *atomic.Int32) {
+		ctx, lease := swaputil.WithModelResponseLease(context.Background())
+		released := &atomic.Int32{}
+		swaputil.ReleaseModelAfterResponse(ctx, func() { released.Add(1) })
+		return lease, released
+	}
+	queued, queuedReleased := newLease()
+	mm.queueReasoningUpdate(5, target, "think", queued)
+	require.Zero(t, queuedReleased.Load())
+	dropped, droppedReleased := newLease()
+	mm.queueReasoningUpdate(6, target, "think", dropped)
+	require.EqualValues(t, 1, droppedReleased.Load(), "a full queue must release immediately")
+
+	require.NoError(t, mm.Close())
+	require.Eventually(t, func() bool { return queuedReleased.Load() == 1 }, time.Second, time.Millisecond)
+	queued.Release()
+	dropped.Release()
+	require.EqualValues(t, 1, queuedReleased.Load())
+	require.EqualValues(t, 1, droppedReleased.Load())
 }
 
 // TestServer_MetricsMiddleware_UpstreamAudioCaptureSkipsRespBody verifies that

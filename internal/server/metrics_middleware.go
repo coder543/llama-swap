@@ -75,13 +75,22 @@ func CreateMetricsMiddleware(mm *metricsMonitor, cfg config.Config) chain.Middle
 			}
 
 			recorder := newBodyCopier(w)
+			tokenizerTarget, _ := resolveReasoningTokenizerTarget(cfg, data.ModelID)
+			var lease *swaputil.ModelResponseLease
+			if _, local := cfg.Models[data.ModelID]; local && tokenizerTarget.URL != "" {
+				ctx, modelLease := swaputil.WithModelResponseLease(r.Context())
+				r = r.WithContext(ctx)
+				lease = modelLease
+			}
+			// If dispatch panics, return any slots registered during unwinding.
+			defer func() { lease.Release() }()
 			next.ServeHTTP(recorder, r)
 			// A request abandoned before any response was written must not be
 			// filed as a successful (empty-body) metric. See #1029.
 			swaputil.MarkClientClosed(recorder, r)
-			tokenizerTarget, _ := resolveReasoningTokenizerTarget(cfg, data.ModelID)
-			mm.record(data.ModelID, r, recorder, cf, reqBody, reqHeaders, tokenizerTarget)
-
+			if mm.record(data.ModelID, r, recorder, cf, reqBody, reqHeaders, tokenizerTarget, lease) {
+				lease = nil // The tokenizer job now owns the lease.
+			}
 		})
 	}
 }
